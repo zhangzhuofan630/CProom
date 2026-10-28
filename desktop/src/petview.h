@@ -2,9 +2,12 @@
 
 #include <QElapsedTimer>
 #include <QPoint>
+#include <QPointF>
 #include <QString>
 #include <QTimer>
 #include <QWidget>
+
+#include <climits>
 
 #include "petpack.h"
 
@@ -12,9 +15,9 @@ namespace pet {
 
 /// 桌宠渲染窗口。
 ///
-/// 这一版的唯一目的：把 web demo 里验证过的分层合成逻辑搬到 Qt 里，
-/// 然后测出真实 CPU 与内存。web demo 的 60fps 不能作为依据——Canvas 2D
-/// 与 QPainter 后端是两套东西。
+/// S0.9 的职责是测渲染开销，S1.0 加上交互：把它拎起来、甩出去、看着它
+/// 落到任务栏上弹一下。交互用的是同一套物理——跳跃只是「给一个向上的
+/// 初速度」，和拖拽落体共用一条积分路径，没有第二套动画系统。
 ///
 /// 刻意保持极简：没有设置界面、没有托盘、没有配置文件。全部参数走命令行，
 /// 这样 bench 模式可以无人值守地跑。
@@ -39,9 +42,17 @@ public:
     /// （XWayland 下抓不到根窗口，只能让程序自己 render 出图。）
     void freeze(qreal angleDeg, const QString &exprName);
 
+    /// 给桌宠一个初速度（px/s，y 向上为负）。无头环境下验证落体用。
+    void throwPet(qreal vx, qreal vy);
+
+    /// 每 100ms 打印一次位置与速度，配合 --throw 观察轨迹。
+    void setTrace(bool on);
+
 protected:
     void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
     void showEvent(QShowEvent *event) override;
 
 private:
@@ -49,8 +60,11 @@ private:
     void drawLayer(QPainter &p, const QString &name);
     void setExpr(const QString &name, int durationMs);
     void updateFollowTarget(qreal dt);
+    void stepPhysics(qreal dt);
+    void updateGround();
     void benchTick();
     void applyFrameRate(bool active);
+    QRect currentAvail() const;
 
     const PetPack &m_pack;
 
@@ -63,10 +77,32 @@ private:
     qreal m_angleDeg = 0.0;   ///< 头部旋转
     qreal m_offX = 0.0;       ///< 头部水平偏移（跟随光标）
     qreal m_offY = 0.0;       ///< 头部垂直偏移
-    qreal m_jumpY = 0.0;      ///< 跳跃位移（负数 = 向上），通过移动窗口实现
-    qreal m_jumpVy = 0.0;
-    QPoint m_basePos;         ///< 站立时的窗口位置
-    int m_appliedJump = 0;    ///< 已应用的跳跃像素，避免重复 move
+
+    // --- 窗口位置与物理（跳跃和落体共用一套积分） ---
+    //
+    // 位置存 qreal 而不是 QPoint：拖拽时每帧位移常常不足 1px，用整数
+    // 位置会被反复取整，慢速拖动看起来像卡帧。窗口本身仍然是整数坐标，
+    // 只在 move() 那一刻取整。
+    qreal m_posX = 0.0;
+    qreal m_posY = 0.0;
+    qreal m_velX = 0.0;
+    qreal m_velY = 0.0;
+    qreal m_groundY = 0.0;    ///< 站立时窗口左上角的 y（随所在屏幕重算）
+    bool m_airborne = false;  ///< 不在地面：受重力支配
+    int m_appliedX = INT_MIN;  ///< 已 move 到的整数坐标，避免重复 move
+    int m_appliedY = INT_MIN;
+
+    // --- 拖拽 ---
+    bool m_dragging = false;
+    bool m_dragMoved = false;  ///< 位移超过阈值，判定为拖动而非点击
+    QPoint m_grabOffset;       ///< 按下时鼠标相对窗口左上角的偏移
+    QPoint m_pressGlobal;      ///< 按下时的鼠标全局位置，用于算拖动阈值
+    qint64 m_dragLastMs = 0;
+    qint64 m_pressMs = 0;
+
+    // --- 落地压扁 ---
+    qreal m_squash = 0.0;  ///< 0..1，落地瞬间置 1，指数衰减
+    qreal m_angleJitter = 0.0;  ///< 落地时头部被震一下
 
     // --- 表情状态机 ---
     QString m_expr;
@@ -85,6 +121,10 @@ private:
     qint64 m_activeUntil = 0;   ///< 事件触发的强制高帧率窗口
     qreal m_prevAngle = 0.0;
     qreal m_prevOffX = 0.0;
+
+    // --- trace ---
+    bool m_trace = false;
+    qint64 m_traceNext = 0;
 
     // --- bench ---
     BenchMode m_benchMode = BenchMode::Off;

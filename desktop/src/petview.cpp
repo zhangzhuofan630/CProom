@@ -7,6 +7,7 @@
 #include <QRandomGenerator>
 #include <QScreen>
 #include <QShowEvent>
+#include <QWindow>
 #include <QtMath>
 
 #include <cmath>
@@ -23,8 +24,8 @@ namespace {
 // 所以它们不是「好看就行」的排版参数，是性能参数：
 //   kPadX    —— 角色包围盒外本来就有 ~30px 空白，旋转 ±12° 的水平位移
 //              约 32px，所以 4px 就够，给太多纯属浪费。
-//   kPadTop  —— 跳跃用窗口位移而不是内容位移实现（见 mousePressEvent），
-//              顶部不再需要预留 78px。
+//   kPadTop  —— 跳跃/拖拽都靠移动窗口实现（内容不做位移），顶部不需要
+//              预留「跳起来 50px」那块永远空着的透明区域。
 constexpr int kPadX = 4;
 constexpr int kPadTop = 8;
 constexpr int kPadBottom = 4;
@@ -35,8 +36,17 @@ constexpr qreal kMaxOffY = 4.0;
 constexpr qreal kBreathAmp = 1.8;  ///< 呼吸位移幅度（px）
 constexpr qreal kBreathPeriod = 4.2;  ///< 秒
 
-constexpr qreal kJumpV0 = -430.0;     ///< px/s
+constexpr qreal kJumpV0 = -430.0;     ///< px/s，点一下的起跳速度
 constexpr qreal kGravity = 1900.0;    ///< px/s²
+constexpr qreal kAirDragX = 1.8;      ///< 空中水平阻尼（1/s）
+constexpr qreal kGroundFriction = 14.0;  ///< 落地后的地面摩擦（1/s），比空气阻尼大一个量级
+constexpr qreal kStopVx = 20.0;       ///< 落地后横向速度低于此值直接归零（px/s）
+constexpr qreal kBounceMin = 620.0;   ///< 触地速度低于此值不再弹，直接站住
+constexpr qreal kRestitution = 0.30;  ///< 触地回弹系数
+constexpr qreal kMaxThrow = 2400.0;   ///< 甩出速度上限，防止一挥手把它扔到屏幕外
+
+constexpr qreal kDragThreshold = 4.0;  ///< 按下后位移超过此值（px）才算拖动，否则算点击
+constexpr qint64 kClickMaxMs = 400;     ///< 按住超过这么久就不算点击
 } // namespace
 
 PetView::PetView(const PetPack &pack, QWidget *parent)
@@ -78,11 +88,32 @@ void PetView::freeze(qreal angleDeg, const QString &exprName)
     m_offX = 0.0;
     m_offY = 0.0;
     m_breathOffset = 0.0;
-    m_jumpY = 0.0;
-    m_jumpVy = 0.0;
+    m_velX = 0.0;
+    m_velY = 0.0;
+    m_airborne = false;
+    m_dragging = false;
+    m_squash = 0.0;
+    m_angleJitter = 0.0;
     m_expr = exprName;
     m_exprUntil = 1 << 30;
     update();
+}
+
+void PetView::throwPet(qreal vx, qreal vy)
+{
+    updateGround();
+    m_velX = vx;
+    m_velY = vy;
+    m_airborne = true;
+    m_dragging = false;
+    m_lastInput = m_clock.elapsed();
+    setExpr(QStringLiteral("surprised"), 900);
+}
+
+void PetView::setTrace(bool on)
+{
+    m_trace = on;
+    m_traceNext = 0;
 }
 
 void PetView::applyFrameRate(bool active)
@@ -115,6 +146,24 @@ void PetView::setBench(int seconds, BenchMode mode)
     }
 }
 
+QRect PetView::currentAvail() const
+{
+    QScreen *scr = windowHandle() ? windowHandle()->screen() : nullptr;
+    if (!scr)
+        scr = screen();
+    if (!scr)
+        scr = QGuiApplication::primaryScreen();
+    return scr ? scr->availableGeometry() : QRect(0, 0, 1920, 1080);
+}
+
+void PetView::updateGround()
+{
+    const QRect avail = currentAvail();
+    // 让「内容底边」正好落在可用区域底边（任务栏上沿）：
+    // 窗口高度含 kPadBottom 的内边距，所以要多减一层。
+    m_groundY = avail.bottom() + 1 - height() + kPadBottom;
+}
+
 void PetView::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
@@ -125,8 +174,23 @@ void PetView::paintEvent(QPaintEvent *)
     const qreal ph = m_pack.height();
     const qreal baseY = height() - kPadBottom - ph;
 
-    // 内容坐标原点。跳跃不在这里做——跳跃是移动窗口，这样窗口不用为
-    // 「跳起来 50px」预留一块永远空着的透明区域。
+    p.save();
+
+    // 落地压扁：以内容底边中点为锚点整体缩放。
+    // 只在 150ms 内发生（m_squash 指数衰减到 0.01 以下就跳过），
+    // 短暂重采样换手感是值得的；常驻缩放才是性能陷阱。
+    if (m_squash > 0.01) {
+        const qreal sx = 1.0 + 0.10 * m_squash;
+        const qreal sy = 1.0 - 0.14 * m_squash;
+        const qreal ax = kPadX + pw * 0.5;
+        const qreal ay = baseY + ph;
+        p.translate(ax, ay);
+        p.scale(sx, sy);
+        p.translate(-ax, -ay);
+    }
+
+    // 内容坐标原点。跳跃、拖拽、落体全都不在这里做——那些是移动窗口，
+    // 这样窗口不用为「跳起来 50px」预留一块永远空着的透明区域。
     //
     // 呼吸也不用 scale 做：缩放会让四层每一帧都走一次双线性重采样，
     // 那是纯 CPU 白烧。改成整体上下平移 1~2px，视觉上更像呼吸（重心起伏），
@@ -139,7 +203,7 @@ void PetView::paintEvent(QPaintEvent *)
     // 头部：以颈部为轴心旋转。这是 petpack 里 neck_y 的唯一用途。
     p.save();
     p.translate(pw / 2.0 + m_offX, m_pack.neckY() + m_offY);
-    p.rotate(m_angleDeg);
+    p.rotate(m_angleDeg + m_angleJitter);
     p.translate(-pw / 2.0, -m_pack.neckY());
     drawLayer(p, QStringLiteral("head"));
     if (!m_expr.isEmpty())
@@ -148,6 +212,8 @@ void PetView::paintEvent(QPaintEvent *)
 
     // 衣领遮罩：固定在身体上，不跟头动。头偏移时靠它盖住脖子缺口。
     drawLayer(p, QStringLiteral("collar"));
+
+    p.restore();
 
     ++m_frameCount;
     ++m_benchFrames;
@@ -177,13 +243,126 @@ void PetView::setExpr(const QString &name, int durationMs)
 
 void PetView::mousePressEvent(QMouseEvent *event)
 {
-    if (event->button() == Qt::LeftButton) {
-        if (m_jumpY >= 0.0 && m_jumpVy == 0.0)
-            m_jumpVy = kJumpV0;
-        setExpr(QStringLiteral("happy"), 1100);
-        m_lastInput = m_clock.elapsed();
+    if (event->button() != Qt::LeftButton) {
+        QWidget::mousePressEvent(event);
+        return;
     }
-    QWidget::mousePressEvent(event);
+
+    const qint64 now = m_clock.elapsed();
+    m_dragging = true;
+    m_dragMoved = false;
+    // 一按下就脱离地面：手指按住的瞬间它不该继续往下掉
+    m_airborne = true;
+    m_velX = 0.0;
+    m_velY = 0.0;
+    m_pressMs = now;
+    m_dragLastMs = now;
+    m_lastInput = now;
+
+    const QPoint gp = event->globalPosition().toPoint();
+    m_grabOffset = gp - pos();
+    m_pressGlobal = gp;
+
+    setCursor(Qt::ClosedHandCursor);
+    setExpr(QStringLiteral("surprised"), 1 << 30);
+    m_activeUntil = now + 300;
+    event->accept();
+}
+
+void PetView::mouseMoveEvent(QMouseEvent *event)
+{
+    if (!m_dragging) {
+        QWidget::mouseMoveEvent(event);
+        return;
+    }
+
+    // 不用 event->position()：窗口被 move 之后，局部坐标会跟着变，
+    // 而全局坐标不受影响，用全局坐标减按下时的抓取偏移才是稳的。
+    const QPoint gp = event->globalPosition().toPoint();
+
+    // 拖动阈值要跟「按下时的鼠标位置」比，不能跟窗口当前位置比：
+    // 慢慢挪的时候每帧只差 1px，跟窗口比永远超不过阈值，会被误判成点击。
+    if (!m_dragMoved) {
+        if (qAbs(gp.x() - m_pressGlobal.x()) <= kDragThreshold
+            && qAbs(gp.y() - m_pressGlobal.y()) <= kDragThreshold) {
+            event->accept();  // 还在死区内：窗口不动，避免手抖把桌宠挪走
+            return;
+        }
+        m_dragMoved = true;
+        m_dragLastMs = m_clock.elapsed();
+    }
+
+    const qreal rawX = gp.x() - m_grabOffset.x();
+    const qreal rawY = gp.y() - m_grabOffset.y();
+
+    // 拖动时必须钳在屏幕内。不钳的话可以把它拖到屏幕外面，松手后窗口
+    // 就再也点不到了——用户会以为桌宠没了。
+    updateGround();
+    const QRect avail = currentAvail();
+    const qreal maxX = qMax(qreal(avail.left()),
+                            qreal(avail.left() + avail.width() - width()));
+    const qreal nx = qBound(qreal(avail.left()), rawX, maxX);
+    const qreal ny = qBound(qreal(avail.top()), rawY, m_groundY);
+
+    const qint64 now = m_clock.elapsed();
+    const qreal dt = (now - m_dragLastMs) / 1000.0;
+    if (dt > 0.0005) {
+        // 速度要用「钳制后」的位移算：贴着边拖时速度为 0，松手不会弹射出去
+        const qreal ivx = (nx - m_posX) / dt;
+        const qreal ivy = (ny - m_posY) / dt;
+        // 低通滤波：鼠标事件本身有抖动，直接拿瞬时速度会在松手时把它甩飞
+        m_velX = m_velX * 0.55 + ivx * 0.45;
+        m_velY = m_velY * 0.55 + ivy * 0.45;
+        m_dragLastMs = now;
+    }
+
+    m_posX = nx;
+    m_posY = ny;
+
+    const int ix = qRound(m_posX);
+    const int iy = qRound(m_posY);
+    if (ix != m_appliedX || iy != m_appliedY) {
+        m_appliedX = ix;
+        m_appliedY = iy;
+        move(ix, iy);
+    }
+    event->accept();
+}
+
+void PetView::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() != Qt::LeftButton || !m_dragging) {
+        QWidget::mouseReleaseEvent(event);
+        return;
+    }
+
+    m_dragging = false;
+    setCursor(Qt::PointingHandCursor);
+
+    const qint64 now = m_clock.elapsed();
+    m_lastInput = now;
+    updateGround();
+
+    if (!m_dragMoved && now - m_pressMs < kClickMaxMs) {
+        // 点一下：原地小跳。和落体走同一套积分，没有第二套动画系统
+        m_velX = 0.0;
+        m_velY = kJumpV0;
+        m_airborne = true;
+        setExpr(QStringLiteral("happy"), 1100);
+    } else {
+        // 甩出去：限速，别让一次挥手把它扔到屏幕外
+        m_velX = qBound(-kMaxThrow, m_velX, kMaxThrow);
+        m_velY = qBound(-kMaxThrow, m_velY, kMaxThrow);
+        m_airborne = true;
+        // 拖到任务栏下方松手时，别让它在屏幕外往下坠
+        if (m_posY > m_groundY)
+            m_posY = m_groundY;
+        setExpr(QStringLiteral("happy"), 700);
+    }
+
+    m_activeUntil = now + 400;
+    applyFrameRate(true);
+    event->accept();
 }
 
 void PetView::showEvent(QShowEvent *event)
@@ -194,17 +373,24 @@ void PetView::showEvent(QShowEvent *event)
         return;
     placed = true;
 
-    QScreen *scr = screen() ? screen() : QGuiApplication::primaryScreen();
-    if (!scr)
-        return;
-    const QRect avail = scr->availableGeometry();
-    // 让「内容底边」正好落在可用区域底边：窗口底要往外多探 kPadBottom
-    m_basePos = QPoint(avail.right() - width() - 60, avail.bottom() - height() + kPadBottom);
-    move(m_basePos);
+    const QRect avail = currentAvail();
+    updateGround();
+
+    // 右下角，离右边 60px。m_posX/m_posY 是唯一的位置真相，
+    // 窗口坐标只是它的整数投影，校验过一次就不再依赖 frameGeometry()。
+    m_posX = avail.left() + avail.width() - width() - 60;
+    m_posY = m_groundY;
+    m_appliedX = qRound(m_posX);
+    m_appliedY = qRound(m_posY);
+    move(m_appliedX, m_appliedY);
 }
 
 void PetView::updateFollowTarget(qreal dt)
 {
+    // 拎在半空时不该转头看光标——手是把它吊起来的，头跟着光标转会显得断线
+    if (m_dragging)
+        return;
+
     // 缓动系数按 dt 归一，否则改帧率会让动作速度跟着变
     const qreal k = 1.0 - std::exp(-dt * 4.8);
 
@@ -234,8 +420,8 @@ void PetView::updateFollowTarget(qreal dt)
         }
 
         const QPoint center = mapToGlobal(QPoint(width() / 2, height() / 2));
-        QScreen *scr = screen() ? screen() : QGuiApplication::primaryScreen();
-        const QSize scrSize = scr ? scr->geometry().size() : QSize(1920, 1080);
+        const QRect avail = currentAvail();
+        const QSize scrSize = avail.size();
 
         // 光标相对桌宠的水平距离，映射到 ±1，再乘最大角度。
         // 分母用半屏而非窗口宽度：桌宠很小，按窗口宽度算会一动就到极限。
@@ -251,6 +437,87 @@ void PetView::updateFollowTarget(qreal dt)
     m_offY += (ny * kMaxOffY - m_offY) * k;
 }
 
+void PetView::stepPhysics(qreal dt)
+{
+    if (m_dragging)
+        return;
+
+    updateGround();
+    const QRect avail = currentAvail();
+
+    // --- 水平：空中靠空气阻尼，落地后靠地面摩擦 ---
+    if (qAbs(m_velX) > 0.5) {
+        m_posX += m_velX * dt;
+        // 落地后必须换成大得多的摩擦系数：一开始两处都用空气阻尼，
+        // 结果甩一下它能在屏幕上滑三秒多，看着像踩在冰上。
+        m_velX *= std::exp(-dt * (m_airborne ? kAirDragX : kGroundFriction));
+
+        const qreal minX = avail.left();
+        const qreal maxX = avail.left() + avail.width() - width();
+        if (m_posX < minX) {
+            m_posX = minX;
+            m_velX = -m_velX * 0.35;
+        } else if (m_posX > maxX) {
+            m_posX = maxX;
+            m_velX = -m_velX * 0.35;
+        }
+    } else if (m_velX != 0.0) {
+        m_velX = 0.0;
+    }
+    // 摩擦是指数衰减，永远逼近但不到零；落地后必须有个截断，
+    // 否则会为了最后 1px 的位移继续满帧重绘好几秒。
+    if (!m_airborne && qAbs(m_velX) < kStopVx)
+        m_velX = 0.0;
+
+    // --- 垂直：重力积分 ---
+    if (m_airborne || m_velY != 0.0) {
+        m_velY += kGravity * dt;
+        m_posY += m_velY * dt;
+
+        if (m_posY >= m_groundY) {
+            m_posY = m_groundY;
+            m_velX *= 0.5;  // 触地一次吃掉一半横向速度：落地是擦地，不是弹球
+            if (m_velY > kBounceMin) {
+                // 砸得够重才弹：小跳落地直接站住，从高处摔下来才有回弹
+                m_velY = -m_velY * kRestitution;
+                m_squash = 1.0;
+                m_angleJitter = qBound(-2.5, m_velY / 260.0, 2.5);
+            } else {
+                const qreal impact = m_velY;
+                m_velY = 0.0;
+                if (m_airborne) {
+                    m_airborne = false;
+                    m_squash = qMax(m_squash, qMin(1.0, impact / 700.0));
+                    m_angleJitter = 0.0;
+                    m_lastInput = m_clock.elapsed();
+                    if (m_expr.isEmpty() || m_expr == QLatin1String("surprised"))
+                        setExpr(QStringLiteral("happy"), 500);
+                }
+            }
+        }
+    }
+
+    // --- 落地形变衰减 ---
+    if (m_squash > 0.001)
+        m_squash *= std::exp(-dt * 9.0);
+    else
+        m_squash = 0.0;
+
+    if (qAbs(m_angleJitter) > 0.01)
+        m_angleJitter *= std::exp(-dt * 7.0);
+    else
+        m_angleJitter = 0.0;
+
+    // 只在跨过整像素时才 move：一次跳跃约 13 次窗口移动，不是每帧都动
+    const int ix = qRound(m_posX);
+    const int iy = qRound(m_posY);
+    if (ix != m_appliedX || iy != m_appliedY) {
+        m_appliedX = ix;
+        m_appliedY = iy;
+        move(ix, iy);
+    }
+}
+
 void PetView::tick()
 {
     const qint64 now = m_clock.elapsed();
@@ -264,24 +531,7 @@ void PetView::tick()
     // 呼吸：整体上下浮动。这里是位移不是缩放，理由见上。
     m_breathOffset = qSin(2.0 * M_PI * (now / 1000.0) / kBreathPeriod) * kBreathAmp;
 
-    // --- 跳跃物理 ---
-    if (m_jumpY < 0.0 || m_jumpVy < 0.0) {
-        m_jumpVy += kGravity * dt;
-        m_jumpY += m_jumpVy * dt;
-        if (m_jumpY >= 0.0) {
-            m_jumpY = 0.0;
-            m_jumpVy = 0.0;
-        }
-    }
-    // 跳跃用窗口位移：只在跨过整像素时才 move，一次跳跃约 13 次
-    if (!m_basePos.isNull()) {
-        const int jy = qRound(m_jumpY);
-        if (jy != m_appliedJump) {
-            m_appliedJump = jy;
-            move(m_basePos + QPoint(0, jy));
-        }
-    }
-
+    stepPhysics(dt);
     updateFollowTarget(dt);
 
     // --- 表情状态机 ---
@@ -302,14 +552,24 @@ void PetView::tick()
 
     // --- 动态帧率 ---
     // 判定标准是「这一帧画面真的变了」，而不是「有定时器在跑」。静止时
-    // 只有呼吸在动，8fps 足够；一旦头部在追、在跳、在眨眼，就上满帧。
+    // 只有呼吸在动，8fps 足够；一旦头部在追、在跳、在落地形变，就上满帧。
     const bool headMoving = qAbs(m_angleDeg - m_prevAngle) > 0.05
                          || qAbs(m_offX - m_prevOffX) > 0.05;
-    const bool jumping = m_jumpY < -0.5 || m_jumpVy != 0.0;
+    const bool physicsMoving = m_airborne || m_dragging || m_squash > 0.01
+                            || qAbs(m_velX) > 1.0;
     const bool exprAnim = now < m_exprUntil && (m_exprUntil - now) < 400;
-    applyFrameRate(headMoving || jumping || exprAnim || now < m_activeUntil);
+    applyFrameRate(headMoving || physicsMoving || exprAnim || now < m_activeUntil);
     m_prevAngle = m_angleDeg;
     m_prevOffX = m_offX;
+
+    if (m_trace && now >= m_traceNext) {
+        m_traceNext = now + 100;
+        std::printf("[trace] t=%6.2fs pos=(%7.1f,%7.1f) vel=(%7.0f,%7.0f) air=%d drag=%d "
+                    "squash=%4.2f ground=%7.1f\n",
+                    now / 1000.0, m_posX, m_posY, m_velX, m_velY, int(m_airborne),
+                    int(m_dragging), m_squash, m_groundY);
+        std::fflush(stdout);
+    }
 
     update();
 }

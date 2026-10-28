@@ -6,6 +6,8 @@
 #   ./run.sh --fps 30        换帧率
 #   ./run.sh --bench 10      只测性能，10 秒后自己退出
 #
+# 操作：点一下会跳；按住拖动可以拎起来，甩出去会落到任务栏上弹一下。
+#
 # 素材默认读 $HOME/AI/petpack，可用 PETPACK=/path ./run.sh 覆盖。
 
 set -euo pipefail

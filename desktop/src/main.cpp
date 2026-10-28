@@ -1,9 +1,11 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDir>
+#include <QMouseEvent>
 #include <QScreen>
 #include <QTextStream>
 #include <QTimer>
+#include <QtMath>
 
 #include <cstdio>
 
@@ -12,18 +14,21 @@
 #include "petview.h"
 #include "version.h"
 
-// 情侣桌宠 · S0.9 最小渲染器
+// 情侣桌宠 · 最小渲染器 + 交互原型
 //
-// 这一版只干一件事：把 petpack 的四层 + 表情补丁用 QPainter 合成出来，
-// 然后自己报出 CPU 与内存。web demo 的 60fps 不能当依据——Canvas 2D 和
-// QPainter 是两套后端，S0.9 的验收指标（空闲 CPU < 1%、内存 < 150MB）
-// 必须在 Qt 里真跑一遍。
+// 干两件事：
+//   1. 把 petpack 的四层 + 表情补丁用 QPainter 合成出来，自己报出 CPU 与内存
+//      （S0.9 的验收指标：空闲 CPU < 1%、内存 < 150MB，必须在 Qt 里真跑）
+//   2. 拖拽 / 抛掷 / 落地物理（S1.0），跳跃和落体共用一套积分
 //
 // 用法：
 //   desktop                         普通模式，桌宠出现在屏幕右下角
 //   desktop --bench 6               跑 6 秒后打印性能数据并退出
 //   desktop --bench 6 --follow      bench 时也跟随光标（busy 场景）
-//   desktop --fps 0                 不刷新（基线 CPU）
+//   desktop --bench 6 --animate     让头部持续摆动，测 CPU 上界
+//   desktop --throw 600,-800        启动后立刻抛出去（无头环境验证落体）
+//   desktop --test-drag             合成一次「按下→拖动→松手」，验证拖拽链路
+//   desktop --snapshot out.png      渲染一帧存成 PNG（XWayland 抓不到根窗口）
 
 int main(int argc, char *argv[])
 {
@@ -67,8 +72,16 @@ int main(int argc, char *argv[])
     QCommandLineOption snapExprOpt(QStringLiteral("snap-expr"),
                                    QStringLiteral("截图时的表情名"),
                                    QStringLiteral("name"), QString());
+    QCommandLineOption throwOpt(QStringLiteral("throw"),
+                                QStringLiteral("启动后立刻给一个初速度 vx,vy（px/s，向上为负），"
+                                               "无头环境验证落体用"),
+                                QStringLiteral("vx,vy"));
+    QCommandLineOption traceOpt(QStringLiteral("trace"),
+                                QStringLiteral("每 100ms 打印一次位置与速度"));
+    QCommandLineOption dragTestOpt(QStringLiteral("test-drag"),
+                                   QStringLiteral("合成一次「按下→拖动→松手」以验证拖拽链路"));
     parser.addOptions({packOpt, widthOpt, fpsOpt, idleFpsOpt, benchOpt, followOpt, animateOpt,
-                       snapOpt, snapAngleOpt, snapExprOpt});
+                       snapOpt, snapAngleOpt, snapExprOpt, throwOpt, traceOpt, dragTestOpt});
     parser.process(app);
 
     const QString packDir = parser.value(packOpt);
@@ -108,10 +121,49 @@ int main(int argc, char *argv[])
             mode = pet::PetView::BenchMode::Follow;
         view.setBench(benchSecs, mode);
     } else {
-        std::printf("[hint] 桌宠已启动。点它一下会跳；鼠标移动会跟着转头。\n");
+        std::printf("[hint] 桌宠已启动。点一下会跳；按住能拖动，甩出去它会落到任务栏上。\n");
     }
 
     Q_UNUSED(benchSecs);
+
+    if (parser.isSet(traceOpt))
+        view.setTrace(true);
+
+    if (parser.isSet(throwOpt)) {
+        const QStringList v = parser.value(throwOpt).split(QLatin1Char(','));
+        if (v.size() != 2) {
+            std::fprintf(stderr, "[throw] 参数格式应为 vx,vy，例如 900,-700\n");
+            return 2;
+        }
+        const qreal vx = v.at(0).trimmed().toDouble();
+        const qreal vy = v.at(1).trimmed().toDouble();
+        // 等窗口真正 show 完再抛，否则位置还没落定
+        QTimer::singleShot(80, &view, [&view, vx, vy] { view.throwPet(vx, vy); });
+    }
+
+    // 合成拖拽：把 press/move/release 直接塞进事件队列，走的是和真鼠标
+    // 完全相同的代码路径。没有 xdotool 的环境下这是唯一能自动验证拖拽的
+    // 办法——外部模拟鼠标还需要 X 会话里的真实光标抓取。
+    if (parser.isSet(dragTestOpt)) {
+        constexpr int kSteps = 24;
+        constexpr int kStepMs = 16;
+        const QPoint grabGlobal = view.mapToGlobal(QPoint(view.width() / 2, view.height() / 2));
+        for (int i = 0; i <= kSteps; ++i) {
+            const qreal t = qreal(i) / kSteps;
+            // 划一段抛物线：先斜上，再斜下，松手时带一个向左下的速度。
+            // 往左上甩而不是右上，是为了让它全程留在屏幕内——拖拽本身会
+            // 钳边界，贴着边甩出来的速度会被钳成 0，测不到抛掷。
+            const QPointF g(grabGlobal.x() - 260.0 * t, grabGlobal.y() - 200.0 * qSin(t * M_PI));
+            QTimer::singleShot(400 + i * kStepMs, &view, [&view, i, g, kSteps] {
+                const QEvent::Type type = i == 0     ? QEvent::MouseButtonPress
+                                        : i == kSteps ? QEvent::MouseButtonRelease
+                                                      : QEvent::MouseMove;
+                QMouseEvent ev(type, view.mapFromGlobal(g.toPoint()), g, Qt::LeftButton,
+                               i == kSteps ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
+                QApplication::sendEvent(&view, &ev);
+            });
+        }
+    }
 
     if (parser.isSet(snapOpt)) {
         const QString outPath = parser.value(snapOpt);
