@@ -35,6 +35,13 @@
 
 **目标**：把项目立起来，后续每一步都有地方放东西。
 
+> **状态：文件骨架已落盘**（2026-10-28），本地已 `git init` 并提交。
+> 已生成：`desktop/`（CMake + 最小程序 + ctest 用例）、`.github/workflows/ci.yml`、
+> `.gitignore`、`README.md`、`LICENSE`(MIT)、`CONTRIBUTING.md`、`SECURITY.md`、
+> Issue/PR 模板、`.editorconfig`、`.gitattributes`。
+> 剩两步：补仓库名 `git remote add` + `git push -u --force origin main`（远端已有的
+> 网页 `Initial commit` 与本地历史无关，需 force），然后在 Actions 里确认 CI 变绿。
+
 **操作**：
 
 ```bash
@@ -200,6 +207,12 @@ jobs:
 ```
 
 > `install-qt-action@v4` 会自动识别 runner 系统，Linux 用 `linux_gcc_64`（Qt 6.7+ 架构名变更，6.6 及更早是 `linux64`），Windows 用 `win64_msvc2022_64`（Qt 6.8+）。
+
+> **实际落盘版本与上面示例的差异**（都是为了避免 CI 假红，`desktop/CMakeLists.txt` 与 `.github/workflows/ci.yml` 以文件为准）：
+> 1. `find_package` 目前只要 `Core Gui Widgets`，**没要 Qml/Quick**。Qml 属于 `qtdeclarative`，不是 qtbase，如果 `install-qt-action` 没装这个 archive，configure 阶段会直接挂。等 S0.9 确定渲染方案后再加，并同时在 CI 的 `modules:` 里补上。
+> 2. ctest 加了一个真实用例（`desktop/tests/test_version.cpp`，纯 C++ 不依赖 Qt）。**没有测试时 `ctest` 会返回非零码，Test 步骤会假红**，所以这个用例是必要的。
+> 3. `.gitignore` 在示例基础上补了模型文件（`*.safetensors/*.ckpt/*.onnx`）、打包产物、以及 `.workbuddy/`（本地开发笔记，不进公开仓库）。
+
 
 ### .gitignore
 

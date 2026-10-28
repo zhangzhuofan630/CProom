@@ -10,10 +10,12 @@
 
 ## Sprint 0 · 验证尖刺（1.5~2 周）
 
+> 状态图例：✅ 完成 ／ ◐ 部分完成（卡在等外部条件）／ ☐ 未开始
+
 | # | 步骤 | 状态 | 完成日 | 备注 |
 |---|---|---|---|---|
-| S0.1 | 仓库与目录骨架 | ☐ | | |
-| S0.2 | 开发环境与 CI 骨架 | ☐ | | |
+| S0.1 | 仓库与目录骨架 | ◐ | 10-28 | 文件已全部落盘并本地提交，**只差填仓库名 + push** |
+| S0.2 | 开发环境与 CI 骨架 | ◐ | 10-28 | 工程/CI 已写，**差本机装 Qt 6.8.3 + CI 跑绿** |
 | S0.3 | 准备 GPU 环境（本机 RTX 3060 6GB） | ☐ | | |
 | S0.4 | 部署 ComfyUI 与模型 | ☐ | | |
 | S0.5 | 验证项 A：照片→Q版角色 🔀 | ☐ | | |
@@ -23,6 +25,50 @@
 | S0.9 | 最小渲染 demo + 性能实测 🔀 | ☐ | | |
 | S0.10 | Sprint 0 决策门总汇 | ☐ | | |
 | S0.11 | requirements 与素材规范 | ☐ | | |
+
+### S0.1 / S0.2 剩余动作（按顺序做）
+
+已落盘的文件清单：`desktop/`（CMake + 最小程序 + 一个 ctest 用例）、`.github/workflows/ci.yml`（Linux+Windows 双平台）、`.gitignore`、`README.md`、`LICENSE`(MIT)、`CONTRIBUTING.md`、`SECURITY.md`、Issue/PR 模板、`.editorconfig`、`.gitattributes`、目录占位。本地已 `git init` 并提交（commit `e2db67b`）。
+
+**① 补仓库名并推送**
+
+远端目前只有一个网页上建的 `Initial commit`（README 就一个 `-`），和本地历史无关，所以首次推送用 `--force`：
+
+```bash
+cd /home/zzf/Project/情侣桌宠
+git remote add origin git@github.com:zhangzhuofan630/<仓库名>.git
+git push -u --force origin main
+```
+
+> SSH key 没配过的话先 `ssh-keygen -t ed25519 -C "zhangzhuofan630"`，把 `~/.ssh/id_ed25519.pub` 内容贴到 GitHub → Settings → SSH keys。或者直接用 HTTPS：`git remote add origin https://github.com/zhangzhuofan630/<仓库名>.git`（需要 Personal Access Token）。
+
+**② 装 Qt 6.8.3 并本地跑通**
+
+```bash
+python3 -m venv ~/.venvs/aqt && ~/.venvs/aqt/bin/pip install -U pip aqtinstall
+~/.venvs/aqt/bin/aqt install-qt linux desktop 6.8.3 -O ~/Qt      # 约 2GB
+sudo apt install -y ninja-build libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-0 libxcb-cursor0
+
+cmake -S desktop -B build -G Ninja -DCMAKE_PREFIX_PATH=$HOME/Qt/6.8.3/gcc_64
+cmake --build build
+ctest --test-dir build --output-on-failure
+./build/desktop/desktop
+```
+
+看到窗口标题「Desktoppet」、内容「情侣桌宠 · 工程骨架」即通过。
+
+**③ 确认 CI 变绿**
+
+推上去后在仓库 Actions 页看 `CI` 这次运行：`Build (Linux)` 和 `Build (Windows)` 都要绿。**这一步比本地编译更重要** —— 后面所有平台问题都是在这里第一次暴露的。
+
+**④ 打开 Issues**
+
+```bash
+gh repo edit --enable-issues --enable-discussions
+```
+
+> 仓库现在是 **Private**。Sprint 0 阶段私有没问题（Actions 私有仓库每月 2000 分钟免费额度够用），但 **Phase 3 要发 Release 时必须转 Public**，否则别人下载不到安装包。
+
 
 **硬件环境（已确认）**：RTX 3060 Laptop **6GB 显存** / 驱动 580 / CUDA 13.0 / Ubuntu 22.04.5
 
@@ -103,7 +149,8 @@
 
 ## 待办备忘
 
-- [ ] 创建 GitHub 远端仓库并配好 SSH key
+- [x] ~~创建 GitHub 远端仓库~~ → 已建（Private，`zhangzhuofan630/`，**仓库名待填**）
+- [ ] 配 SSH key 或 PAT，把本地 commit 推上去
 - [x] ~~租云 GPU~~ → **本机 RTX 3060 6GB 即可，无需租**
 - [ ] 准备 5 张测试照片（正脸为主，**不要提交到 Git**）
 - [ ] 找 1~2 个 Chibi LoRA（Civitai 搜索 chibi / Q版，**优先找 SDXL 版，显存开销小**）
