@@ -17,9 +17,9 @@
 |---|---|---|---|---|
 | S0.1 | 仓库与目录骨架 | ✅ | 10-28 | 已推送，CI 双平台绿 |
 | S0.2 | 开发环境与 CI 骨架 | ✅ | 10-28 | Qt 6.8.3 本地编译通过，ctest 通过 |
-| S0.3 | 准备 GPU 环境（本机 RTX 3060 6GB） | ☐ | | 需先装 ComfyUI |
-| S0.4 | 部署 ComfyUI 与模型 | ☐ | | |
-| S0.5 | 验证项 A：照片→Q版角色 🔀 | ☐ | | |
+| S0.3 | 准备 GPU 环境（本机 RTX 3060 6GB） | ✅ | 10-28 | ComfyUI 0.43.0 + torch 2.14.1+cu130，GPU 可用 |
+| S0.4 | 部署 ComfyUI 与模型 | ✅ | 10-28 | 15GB 模型就位，IPAdapter/InstantID 节点全注册 |
+| S0.5 | 验证项 A：照片→Q版角色 🔀 | ◐ | 10-28 | 管线跑通，**待真人照片评估相似度** |
 | S0.6 | 验证项 B：多姿势一致性 🔀 | ☐ | | |
 | S0.7 | 自动分层与锚点绑定验证 | ☐ | | |
 | S0.8 | 渲染选型与 petpack 格式冻结 | ☐ | | |
@@ -62,6 +62,11 @@ ctest --test-dir build --output-on-failure
 | 3 | GUI 起不来 / xcb 插件加载失败 | **Ubuntu 22.04 缺 `libxcb-cursor0`**，Qt 6.5+ 的 xcb 插件硬依赖它 | `sudo apt install libxcb-cursor0` |
 | 4 | 可执行文件找不到 | 原文档写 `build/desktop/desktop`，实际 CMake 输出是 `build/desktop`（文件） | 已在 CMake 里加 `RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin`，现在路径是 `build/bin/desktop` |
 | 5 | 文件属主是 root，`git status` 报 dubious ownership | 用 AI 助手执行时以 root 身份写入 | 见下方「一次性修复」 |
+| 6 | `pip install torch` 卡十分钟不动 | 阿里镜像对超大 wheel 限速（实测 0.24 MB/s，HF 是 5.4 MB/s）；`--resume-retries` 会重建临时目录**从头下**，等于没续传 | 大文件改走 `files.pythonhosted.org`（7.5 MB/s）或多线程下载器 |
+| 7 | 下载完的文件只有一半大，旁边一堆 `.partN` | 环境的批量删除保护累计 50 次后拦截分片清理，合并中途抛异常 | 分片删除包 `try/except BaseException`；校验只认字节数 |
+| 8 | `curl` 报 `try 'curl --help'` 且 exit 2 | **Ubuntu 22.04 的 curl 7.81 没有 `--timeout`**，只有 `--max-time` | 大文件别设 `--max-time`（会截断），只设 `--connect-timeout` |
+| 9 | FaceID 报 `proj_in` 形状 1280 vs 1664 不匹配 | `h94/IP-Adapter` 里有**两个不同的** `image_encoder`：`sdxl_models/` 是 ViT-bigG(1664)，`models/` 是 ViT-H(1280)；FaceID Plus v2 要 ViT-H | 两个都下，FaceID 用 ViT-H |
+| 10 | InstantID 出图头大身小、构图崩 | InstantID 用 ControlNet 钉住面部关键点位置，与 chibi 的大头比例冲突 | Q 版路线改用 IP-Adapter FaceID，InstantID 留给写实风格 |
 
 ### 一次性修复（需你自己在终端执行，需要 sudo 密码）
 
@@ -76,11 +81,12 @@ sudo apt install -y libxcb-cursor0
 
 **Sprint 0 决策结论记录**（完成后填）：
 
-- 验证项 A（单图人脸辨识度）：评分 ___/5，决策：_______________
+- 验证项 A（单图人脸辨识度）：评分 ___/5，决策：_______________（**管线已跑通，待真人照片**）
 - 验证项 B（多帧一致性）：路线A 可行？☐ 是 ☐ 否（若 OOM 未测完 → ☐ 待补测）→ petpack 结构定稿为：_______________
 - 渲染方案：☐ QPainter ☐ QML
-- 底模 / IP-Adapter 方案 / LoRA：_______________
-- 实际可用分辨率：_______________（若 6GB 只能 640，记下来，Phase 2 的产品设计要据此调整）
+- 底模 / IP-Adapter 方案 / LoRA：**animagine-xl-4.0 + IP-Adapter FaceID Plus v2** ✅ 已实测；
+  InstantID 在 Q 版上构图崩坏，仅保留给写实风格；LoRA 待下载
+- 实际可用分辨率：**832×832 已稳定（显存 3.8GB / 6GB，耗时 29s）**，可上探 1024×1024
 - petpack 格式版本：_______________
 
 **Sprint 0 期间遇到的显存问题与解法**（供 Phase 2 参考）：
