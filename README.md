@@ -5,7 +5,14 @@
 > 给异地情侣的桌面宠物。Windows 11 + Ubuntu 双平台，可开机自启。
 > 长期目标：上传照片 → 自动生成卡通形象 → 自动变成能跑能跳的桌宠。
 
-**当前状态：Sprint 0（可行性验证阶段），尚无可用版本。**
+**当前状态：Sprint 0 验证完成（可行性 GO），有一版能在桌面上跑的分层渲染原型。**
+
+原型长这样：一个 202×267 的透明置顶窗口，四层图像（腿/身/头/衣领遮罩）用 QPainter 合成，
+鼠标移动时头会跟着转，会自己眨眼，点一下会跳，静置 20 秒会犯困。
+实测空闲 CPU **0.33%**、内存 **55MB**。详见 [`docs/s09-render-report.md`](docs/s09-render-report.md)。
+
+> 注意：仓库里**没有角色素材**（含人脸，永不入库）。想跑起来需要自己生成一套 petpack，
+> 或者等后续提供示例角色包。
 
 ---
 
@@ -44,12 +51,15 @@
 git clone git@github.com:zhangzhuofan630/CProom.git
 cd CProom
 
-# 构建
+# 构建（产物在 build/bin/desktop）
 cmake -S desktop -B build -G Ninja -DCMAKE_PREFIX_PATH=$HOME/Qt/6.8.3/gcc_64
 cmake --build build
 
-# 运行
-./build/desktop/desktop
+# 运行。素材默认读 ~/AI/petpack，没有素材会给出提示
+./run.sh
+
+# 只测性能，10 秒后自己退出
+./run.sh --bench 10
 
 # 测试
 ctest --test-dir build --output-on-failure
@@ -62,6 +72,9 @@ ctest --test-dir build --output-on-failure
 | [`docs/plan-review.md`](docs/plan-review.md) | 方案评估：4 个结构性问题与修订后的路线图 |
 | [`docs/execution-plan.md`](docs/execution-plan.md) | 分步执行指南，每个 Step = 目标 → 命令 → 验收 |
 | [`docs/checklist.md`](docs/checklist.md) | 进度追踪表与决策门结论记录 |
+| [`docs/s05-report.md`](docs/s05-report.md) | 验证报告：照片 → Q 版形象（19 张实测，含参数与踩坑） |
+| [`docs/petpack-spec-draft.md`](docs/petpack-spec-draft.md) | 角色包格式草案 v0.1（由真实切层数据倒推） |
+| [`docs/s09-render-report.md`](docs/s09-render-report.md) | 渲染器实测：CPU/内存、动态帧率策略、渲染选型结论 |
 
 ## 许可
 
