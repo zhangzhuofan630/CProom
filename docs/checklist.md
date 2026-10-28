@@ -5,6 +5,7 @@
 
 **当前阶段**：Sprint 0
 **开始时间**：2026-10-28
+**远端仓库**：`git@github.com:zhangzhuofan630/CProom.git`（Public）
 
 ---
 
@@ -14,9 +15,9 @@
 
 | # | 步骤 | 状态 | 完成日 | 备注 |
 |---|---|---|---|---|
-| S0.1 | 仓库与目录骨架 | ◐ | 10-28 | 文件已全部落盘并本地提交，**只差填仓库名 + push** |
-| S0.2 | 开发环境与 CI 骨架 | ◐ | 10-28 | 工程/CI 已写，**差本机装 Qt 6.8.3 + CI 跑绿** |
-| S0.3 | 准备 GPU 环境（本机 RTX 3060 6GB） | ☐ | | |
+| S0.1 | 仓库与目录骨架 | ✅ | 10-28 | 已推送，CI 双平台绿 |
+| S0.2 | 开发环境与 CI 骨架 | ✅ | 10-28 | Qt 6.8.3 本地编译通过，ctest 通过 |
+| S0.3 | 准备 GPU 环境（本机 RTX 3060 6GB） | ☐ | | 需先装 ComfyUI |
 | S0.4 | 部署 ComfyUI 与模型 | ☐ | | |
 | S0.5 | 验证项 A：照片→Q版角色 🔀 | ☐ | | |
 | S0.6 | 验证项 B：多姿势一致性 🔀 | ☐ | | |
@@ -26,60 +27,50 @@
 | S0.10 | Sprint 0 决策门总汇 | ☐ | | |
 | S0.11 | requirements 与素材规范 | ☐ | | |
 
-### S0.1 / S0.2 剩余动作（按顺序做）
+### S0.1 / S0.2 完成记录
 
-已落盘的文件清单：`desktop/`（CMake + 最小程序 + 一个 ctest 用例）、`.github/workflows/ci.yml`（Linux+Windows 双平台）、`.gitignore`、`README.md`、`LICENSE`(MIT)、`CONTRIBUTING.md`、`SECURITY.md`、Issue/PR 模板、`.editorconfig`、`.gitattributes`、目录占位。本地已 `git init` 并提交（commit `e2db67b`）。
-
-**① 授权 SSH key 并推送**
-
-仓库地址已确认：`git@github.com:zhangzhuofan630/CProom.git`（**Public**）。
-`origin` 已配好，SSH key 已生成在 `~/.ssh/id_ed25519`，SSH 链路实测可通（返回 `Permission denied (publickey)`，即已到认证环节）。
-
-**剩下唯一动作**：把下面这行公钥贴到 https://github.com/settings/keys → `New SSH key`（Title 随便写，如 `zzf-ubuntu`，Key type 选 `Authentication Key`）：
-
-```
-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ19a1Q2zyt4pouubH9kqrFs1bf/pSEC7cL0/u8IAMy/ zhangzhuofan630@users.noreply.github.com
-```
-
-贴完后验证并推送：
+**实际做法与实测结果**（以此为准，`execution-plan.md` 里的命令是原始设计）：
 
 ```bash
-cd /home/zzf/Project/情侣桌宠
-ssh -T git@github.com          # 应返回 "Hi zhangzhuofan630!"
-git push -u --force origin main
-```
+# Qt 6.8.3 —— 注意 aqtinstall 3.x 的参数变了
+python3 -m venv ~/.venvs/aqt
+~/.venvs/aqt/bin/pip install -U pip aqtinstall
+~/.venvs/aqt/bin/aqt install-qt linux desktop 6.8.3 -O ~/Qt -d ~/.cache/aqt-archives
 
-> 首次推送用 `--force`：远端那个网页建的 `Initial commit`（README 只有一个 `-`）与本地历史无关，不 force 会因 unrelated histories 被拒。
-> 后续日常推送就不用 force 了。
-
-
-**② 装 Qt 6.8.3 并本地跑通**
-
-```bash
-python3 -m venv ~/.venvs/aqt && ~/.venvs/aqt/bin/pip install -U pip aqtinstall
-~/.venvs/aqt/bin/aqt install-qt linux desktop 6.8.3 -O ~/Qt      # 约 2GB
-sudo apt install -y ninja-build libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-0 libxcb-cursor0
-
-cmake -S desktop -B build -G Ninja -DCMAKE_PREFIX_PATH=$HOME/Qt/6.8.3/gcc_64
-cmake --build build
+# 构建（不需要 ninja，系统 make 即可；也没装任何 -dev 包，OpenGL 系统自带）
+cmake -S desktop -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=$HOME/Qt/6.8.3/gcc_64
+cmake --build build -j$(nproc)
 ctest --test-dir build --output-on-failure
-./build/desktop/desktop
+./build/bin/desktop
 ```
 
-看到窗口标题「Desktoppet」、内容「情侣桌宠 · 工程骨架」即通过。
+| 验收项 | 结果 |
+|---|---|
+| 仓库可 clone、远端有内容 | ✅ `main` 分支已推 |
+| CI Linux + Windows 双平台 | ✅ 两个 job 都 success |
+| 本地能编译 | ✅ gcc 11 / Qt 6.8.3 |
+| ctest 通过 | ✅ 1/1 passed |
+| 程序能启动 | ✅ offscreen 下事件循环正常 |
+| `.gitignore` 生效 | ✅ `build/`、照片、模型均被排除 |
 
-**③ 确认 CI 变绿**
+### 环境坑（都踩过了，别再重复）
 
-推上去后在仓库 Actions 页看 `CI` 这次运行：`Build (Linux)` 和 `Build (Windows)` 都要绿。**这一步比本地编译更重要** —— 后面所有平台问题都是在这里第一次暴露的。
+| # | 现象 | 原因 | 解法 |
+|---|---|---|---|
+| 1 | `aqt: The '--base' option requires a url...` | **aqtinstall 3.0 起 `-b/--base` 含义变成镜像 URL**，不再是本地目录 | 归档目录用 `-d`；不传 `-b` |
+| 2 | `No space left on device` | 下载解压的临时目录空间不足 | 设 `TMPDIR=<大盘目录>` 再跑 |
+| 3 | GUI 起不来 / xcb 插件加载失败 | **Ubuntu 22.04 缺 `libxcb-cursor0`**，Qt 6.5+ 的 xcb 插件硬依赖它 | `sudo apt install libxcb-cursor0` |
+| 4 | 可执行文件找不到 | 原文档写 `build/desktop/desktop`，实际 CMake 输出是 `build/desktop`（文件） | 已在 CMake 里加 `RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin`，现在路径是 `build/bin/desktop` |
+| 5 | 文件属主是 root，`git status` 报 dubious ownership | 用 AI 助手执行时以 root 身份写入 | 见下方「一次性修复」 |
 
-**④ 打开 Issues**
+### 一次性修复（需你自己在终端执行，需要 sudo 密码）
 
 ```bash
-gh repo edit --enable-issues --enable-discussions
+sudo chown -R $USER:$USER ~/Project/情侣桌宠 ~/Qt ~/.venvs ~/.cache
+sudo apt install -y libxcb-cursor0
 ```
 
-> 仓库已确认是 **Public**（`zhangzhuofan630/CProom`），Phase 3 发 Release 无需再改可见性。公开仓库的 Actions 额度不限（私有仓库才限 2000 分钟/月）。
-
+> 第一条修属主（否则 `git status`、重新编译都可能因权限失败），第二条补上 Qt 运行必需的 xcb 库。
 
 **硬件环境（已确认）**：RTX 3060 Laptop **6GB 显存** / 驱动 580 / CUDA 13.0 / Ubuntu 22.04.5
 
@@ -160,8 +151,9 @@ gh repo edit --enable-issues --enable-discussions
 
 ## 待办备忘
 
-- [x] ~~创建 GitHub 远端仓库~~ → 已建：**`zhangzhuofan630/CProom`（Public）**
-- [ ] 把 SSH 公钥贴到 GitHub（key 已生成，见上文 ①）
+- [x] ~~创建 GitHub 远端仓库~~ → **`zhangzhuofan630/CProom`（Public）**
+- [x] ~~SSH key 与推送~~ → key 已生成并授权，3 个 commit 已推
+- [ ] `sudo chown -R` 修属主 + 装 `libxcb-cursor0`（见上方「一次性修复」）
 - [x] ~~租云 GPU~~ → **本机 RTX 3060 6GB 即可，无需租**
 - [ ] 准备 5 张测试照片（正脸为主，**不要提交到 Git**）
 - [ ] 找 1~2 个 Chibi LoRA（Civitai 搜索 chibi / Q版，**优先找 SDXL 版，显存开销小**）

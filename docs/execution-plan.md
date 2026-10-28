@@ -105,6 +105,11 @@ Ubuntu 22.04 apt 只有 **Qt 6.2.4**（偏旧，且 QML 组件不全）。为了
 ~/Qt/6.8.3/gcc_64/bin/qmake6 -v
 ```
 
+> **实测提醒（2026-10-28，S0.2 已跑通）**：
+> - **aqtinstall 3.x 的 `-b/--base` 已改成「镜像 URL」**，不再是本地目录（3.0 的破坏性变更）。要指定归档存放目录用 `-d`，否则会报 `The '--base' option requires a url where the path online/qtsdkrepository exists`。
+> - 报 `No space left on device` 是**临时目录**空间不足，不是 Qt 太大：`TMPDIR=<大盘目录> aqt install-qt ...`。
+> - **编译不需要任何 `-dev` 包**（OpenGL/XKB 系统自带，cmake 能 FindOpenGL 成功），但**运行需要 `libxcb-cursor0`**，Ubuntu 22.04 默认没装，缺了 xcb 插件直接加载失败。这是「编译过了但双击没反应」的典型原因。
+
 > 只想快速试水、不在乎版本的话，`sudo apt install qt6-base-dev qt6-declarative-dev cmake ninja-build` 也可以，但**项目正式开发建议统一到 6.8.3**，否则 CI 和本地行为会有差异。
 
 其他依赖：
@@ -124,9 +129,9 @@ sudo apt install -y build-essential cmake ninja-build git \
 创建 `desktop/CMakeLists.txt` 与 `desktop/src/main.cpp`（最小空窗口），验证能编译：
 
 ```bash
-cmake -S desktop -B build/desktop -G Ninja -DCMAKE_PREFIX_PATH=$HOME/Qt/6.8.3/gcc_64
-cmake --build build/desktop
-./build/desktop/desktop
+cmake -S desktop -B build -G Ninja -DCMAKE_PREFIX_PATH=$HOME/Qt/6.8.3/gcc_64
+cmake --build build
+./build/bin/desktop
 ```
 
 **关键 CMake 要求**（写进 `desktop/CMakeLists.txt`）：

@@ -44,9 +44,11 @@ qt_add_executable(desktop
 target_link_libraries(desktop PRIVATE petcore Qt6::Widgets)
 
 # Windows 上不弹控制台窗口
+# 输出统一到 build/bin/，避免可执行文件散落在 build/ 根目录
 set_target_properties(desktop PROPERTIES
     WIN32_EXECUTABLE TRUE
     MACOSX_BUNDLE FALSE
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
 # ---- 测试 ----
