@@ -32,14 +32,20 @@ qt_standard_project_setup(REQUIRES 6.5)
 add_library(petcore STATIC
     src/version.cpp
     src/version.h
+    src/petpack.cpp
+    src/petpack.h
+    src/metrics.cpp
+    src/metrics.h
 )
 target_include_directories(petcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(petcore PRIVATE PET_VERSION="${PROJECT_VERSION}")
-target_link_libraries(petcore PUBLIC Qt6::Core)
+target_link_libraries(petcore PUBLIC Qt6::Core Qt6::Gui)
 
 # ---- 可执行文件 ----
 qt_add_executable(desktop
     src/main.cpp
+    src/petview.cpp
+    src/petview.h
 )
 target_link_libraries(desktop PRIVATE petcore Qt6::Widgets)
 
