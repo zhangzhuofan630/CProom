@@ -1,0 +1,56 @@
+# ---- 构建产物 ----
+build/
+build-*/
+out/
+install/
+*.user
+.qmake.stash
+CMakeLists.txt.user
+CMakeUserPresets.json
+compile_commands.json
+
+# ---- Python / 工具脚本 ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# ---- 本地 AI 助手的工作记录 ----
+# 里面是本机的开发笔记，且可能含个人隐私，不进公开仓库。
+# 真正的设计文档在 docs/，那部分是要入库的。
+.workbuddy/
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# ---- 关键：绝不入库真实照片与生成结果 ----
+# 隐私红线。ComfyUI 的输出、测试照片一律不进仓库。
+assets/tests/private/
+assets/tests/incoming/
+comfy-output/
+*.jpg
+*.jpeg
+*.webp
+# 但示例素材目录里的宣传图允许入库
+!assets/examples/**/*.jpg
+!assets/examples/**/*.jpeg
+!assets/examples/**/*.webp
+
+# ---- 本地模型 / 大文件 ----
+*.safetensors
+*.ckpt
+*.pth
+*.onnx
+models/
+
+# ---- 打包产物 ----
+dist/
+*.deb
+*.AppImage
+*.exe
+*.msi
