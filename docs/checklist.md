@@ -30,17 +30,28 @@
 
 已落盘的文件清单：`desktop/`（CMake + 最小程序 + 一个 ctest 用例）、`.github/workflows/ci.yml`（Linux+Windows 双平台）、`.gitignore`、`README.md`、`LICENSE`(MIT)、`CONTRIBUTING.md`、`SECURITY.md`、Issue/PR 模板、`.editorconfig`、`.gitattributes`、目录占位。本地已 `git init` 并提交（commit `e2db67b`）。
 
-**① 补仓库名并推送**
+**① 授权 SSH key 并推送**
 
-远端目前只有一个网页上建的 `Initial commit`（README 就一个 `-`），和本地历史无关，所以首次推送用 `--force`：
+仓库地址已确认：`git@github.com:zhangzhuofan630/CProom.git`（**Public**）。
+`origin` 已配好，SSH key 已生成在 `~/.ssh/id_ed25519`，SSH 链路实测可通（返回 `Permission denied (publickey)`，即已到认证环节）。
+
+**剩下唯一动作**：把下面这行公钥贴到 https://github.com/settings/keys → `New SSH key`（Title 随便写，如 `zzf-ubuntu`，Key type 选 `Authentication Key`）：
+
+```
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ19a1Q2zyt4pouubH9kqrFs1bf/pSEC7cL0/u8IAMy/ zhangzhuofan630@users.noreply.github.com
+```
+
+贴完后验证并推送：
 
 ```bash
 cd /home/zzf/Project/情侣桌宠
-git remote add origin git@github.com:zhangzhuofan630/<仓库名>.git
+ssh -T git@github.com          # 应返回 "Hi zhangzhuofan630!"
 git push -u --force origin main
 ```
 
-> SSH key 没配过的话先 `ssh-keygen -t ed25519 -C "zhangzhuofan630"`，把 `~/.ssh/id_ed25519.pub` 内容贴到 GitHub → Settings → SSH keys。或者直接用 HTTPS：`git remote add origin https://github.com/zhangzhuofan630/<仓库名>.git`（需要 Personal Access Token）。
+> 首次推送用 `--force`：远端那个网页建的 `Initial commit`（README 只有一个 `-`）与本地历史无关，不 force 会因 unrelated histories 被拒。
+> 后续日常推送就不用 force 了。
+
 
 **② 装 Qt 6.8.3 并本地跑通**
 
@@ -67,7 +78,7 @@ ctest --test-dir build --output-on-failure
 gh repo edit --enable-issues --enable-discussions
 ```
 
-> 仓库现在是 **Private**。Sprint 0 阶段私有没问题（Actions 私有仓库每月 2000 分钟免费额度够用），但 **Phase 3 要发 Release 时必须转 Public**，否则别人下载不到安装包。
+> 仓库已确认是 **Public**（`zhangzhuofan630/CProom`），Phase 3 发 Release 无需再改可见性。公开仓库的 Actions 额度不限（私有仓库才限 2000 分钟/月）。
 
 
 **硬件环境（已确认）**：RTX 3060 Laptop **6GB 显存** / 驱动 580 / CUDA 13.0 / Ubuntu 22.04.5
@@ -149,8 +160,8 @@ gh repo edit --enable-issues --enable-discussions
 
 ## 待办备忘
 
-- [x] ~~创建 GitHub 远端仓库~~ → 已建（Private，`zhangzhuofan630/`，**仓库名待填**）
-- [ ] 配 SSH key 或 PAT，把本地 commit 推上去
+- [x] ~~创建 GitHub 远端仓库~~ → 已建：**`zhangzhuofan630/CProom`（Public）**
+- [ ] 把 SSH 公钥贴到 GitHub（key 已生成，见上文 ①）
 - [x] ~~租云 GPU~~ → **本机 RTX 3060 6GB 即可，无需租**
 - [ ] 准备 5 张测试照片（正脸为主，**不要提交到 Git**）
 - [ ] 找 1~2 个 Chibi LoRA（Civitai 搜索 chibi / Q版，**优先找 SDXL 版，显存开销小**）

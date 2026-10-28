@@ -35,12 +35,14 @@
 
 **目标**：把项目立起来，后续每一步都有地方放东西。
 
-> **状态：文件骨架已落盘**（2026-10-28），本地已 `git init` 并提交。
+> **状态：文件骨架已落盘并已本地提交**（2026-10-28，commit `e2db67b` / `34a27fa`）。
 > 已生成：`desktop/`（CMake + 最小程序 + ctest 用例）、`.github/workflows/ci.yml`、
 > `.gitignore`、`README.md`、`LICENSE`(MIT)、`CONTRIBUTING.md`、`SECURITY.md`、
 > Issue/PR 模板、`.editorconfig`、`.gitattributes`。
-> 剩两步：补仓库名 `git remote add` + `git push -u --force origin main`（远端已有的
-> 网页 `Initial commit` 与本地历史无关，需 force），然后在 Actions 里确认 CI 变绿。
+> `origin` 已指向 `git@github.com:zhangzhuofan630/CProom.git`，SSH key 已生成且链路可通。
+> **剩两步**：① 把 `~/.ssh/id_ed25519.pub` 贴到 GitHub → Settings → SSH keys；
+> ② `git push -u --force origin main`（远端网页版 `Initial commit` 与本地历史无关，需 force），
+> 然后在 Actions 里确认 CI 变绿。
 
 **操作**：
 

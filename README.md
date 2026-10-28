@@ -1,5 +1,7 @@
 # 情侣桌宠 / Desktoppet
 
+[![CI](https://github.com/zhangzhuofan630/CProom/actions/workflows/ci.yml/badge.svg)](https://github.com/zhangzhuofan630/CProom/actions/workflows/ci.yml)
+
 > 给异地情侣的桌面宠物。Windows 11 + Ubuntu 双平台，可开机自启。
 > 长期目标：上传照片 → 自动生成卡通形象 → 自动变成能跑能跳的桌宠。
 
@@ -39,6 +41,9 @@
 环境要求：CMake ≥ 3.21、Qt 6.5+（CI 用 6.8.3）、MSVC 2022 或 GCC。
 
 ```bash
+git clone git@github.com:zhangzhuofan630/CProom.git
+cd CProom
+
 # 构建
 cmake -S desktop -B build -G Ninja -DCMAKE_PREFIX_PATH=$HOME/Qt/6.8.3/gcc_64
 cmake --build build
