@@ -1,6 +1,7 @@
 #include "petview.h"
 
 #include <QCursor>
+#include <QCloseEvent>
 #include <QGuiApplication>
 #include <QMouseEvent>
 #include <QPainter>
@@ -14,6 +15,7 @@
 #include <cstdio>
 
 #include "metrics.h"
+#include "shell.h"
 
 namespace pet {
 
@@ -166,10 +168,23 @@ QRect PetView::currentAvail() const
 
 void PetView::updateGround()
 {
-    const QRect avail = currentAvail();
+    updateGround(currentAvail());
+}
+
+void PetView::updateGround(const QRect &avail)
+{
     // 让「内容底边」正好落在可用区域底边（任务栏上沿）：
     // 窗口高度含 kPadBottom 的内边距，所以要多减一层。
-    m_groundY = avail.bottom() + 1 - height() + kPadBottom;
+    qreal g = avail.bottom() + 1 - height() + kPadBottom;
+
+    // 但窗口不能探出物理屏幕：内容底边贴着屏幕底时，窗口会比屏幕高
+    // kPadBottom 那么多，窗管会把它顶回来。不在这里跟着夹的话，Qt 记着的
+    // 是 817、X 上实际在 813，存位置时存 817、下次恢复又变 813，
+    // 每轮存取漂 4px，而且拖拽的边界计算用的是另一个值。
+    if (QScreen *s = QGuiApplication::screenAt(avail.center()))
+        g = qMin(g, qreal(s->geometry().bottom() + 1 - height()));
+
+    m_groundY = g;
 }
 
 void PetView::paintEvent(QPaintEvent *)
@@ -470,21 +485,93 @@ void PetView::mouseDoubleClickEvent(QMouseEvent *event)
 void PetView::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
+
+    // 从托盘叫回来时要把定时器接上（收进托盘时停过）。
+    // 放在 placed 判断之前——重显示的路径会走到那里就直接返回了。
+    if (!m_timer.isActive())
+        m_timer.start();
+
     static bool placed = false;
     if (placed)
         return;
     placed = true;
 
-    const QRect avail = currentAvail();
-    updateGround();
+    // 位置来源有两个：上次退出时记下的，和「第一次见面」的右下角。
+    //
+    // 记住位置不是为了好看——桌宠是用户亲手摆的，每次重启都弹回右下角
+    // 等于天天重新摆一遍。但同时必须校验：显示器拔了、分辨率改了，
+    // 存下的坐标可能落在任何屏幕之外，那样窗口就永久消失在看不见的地方。
+    bool hasSaved = false;
+    const QPoint saved = m_restoreSavedPos ? shell::savedPos(&hasSaved) : QPoint();
 
-    // 右下角，离右边 60px。m_posX/m_posY 是唯一的位置真相，
-    // 窗口坐标只是它的整数投影，校验过一次就不再依赖 frameGeometry()。
-    m_posX = avail.left() + avail.width() - width() - 60;
-    m_posY = m_groundY;
+    QRect avail;
+    if (hasSaved) {
+        if (QScreen *scr = QGuiApplication::screenAt(saved))
+            avail = scr->availableGeometry();
+    }
+    if (avail.isEmpty())
+        avail = currentAvail();
+
+    updateGround(avail);
+
+    if (hasSaved) {
+        // 夹进可用区域。y 上限是地面：存下来时若高于地面（比如正好在飞行中
+        // 被记下的），保留原值让它自己掉下来，反而更自然。
+        m_posX = qBound(qreal(avail.left()), qreal(saved.x()),
+                        qreal(avail.left() + avail.width() - width()));
+        m_posY = qBound(qreal(avail.top()), qreal(saved.y()), m_groundY);
+        // 存下来的位置如果在地面之上（退出那一刻正在飞、或者换了块更小的屏），
+        // 让它自己掉下来。不置这个标志的话它会永远悬在半空——物理只在
+        // m_airborne 为真时才跑。
+        m_airborne = (m_posY < m_groundY - 1.0);
+    } else {
+        // 右下角，离右边 60px。m_posX/m_posY 是唯一的位置真相，
+        // 窗口坐标只是它的整数投影，校验过一次就不再依赖 frameGeometry()。
+        m_posX = avail.left() + avail.width() - width() - 60;
+        m_posY = m_groundY;
+    }
+
     m_appliedX = qRound(m_posX);
     m_appliedY = qRound(m_posY);
     move(m_appliedX, m_appliedY);
+}
+
+void PetView::resetHome()
+{
+    const QRect avail = currentAvail();
+    updateGround(avail);
+    m_posX = avail.left() + avail.width() - width() - 60;
+    m_posY = m_groundY;
+    m_velX = 0.0;
+    m_velY = 0.0;
+    m_airborne = false;
+    m_appliedX = qRound(m_posX);
+    m_appliedY = qRound(m_posY);
+    move(m_appliedX, m_appliedY);
+    setExpr(QStringLiteral("happy"), 600);
+    emit settled();
+    update();
+}
+
+void PetView::closeEvent(QCloseEvent *event)
+{
+    // 有托盘时必须拦住关闭：QApplication 默认「最后一个窗口关掉就退出」，
+    // 那样点一下 X 就直接没了。收进托盘，从菜单还能叫回来。
+    if (!m_closeHidesToTray) {
+        QWidget::closeEvent(event);
+        return;
+    }
+    event->ignore();
+    emit settled();
+    hide();
+}
+
+void PetView::hideEvent(QHideEvent *event)
+{
+    QWidget::hideEvent(event);
+    // 收进托盘后必须停表。窗口隐藏了不会 paint，但 tick 照跑——物理积分、
+    // 呼吸、跟随光标全在算，纯粹空转，而且 bench 出来的数还会骗人。
+    m_timer.stop();
 }
 
 void PetView::updateFollowTarget(qreal dt)
@@ -594,6 +681,9 @@ void PetView::stepPhysics(qreal dt)
                     m_lastInput = m_clock.elapsed();
                     if (m_expr.isEmpty() || m_expr == QLatin1String("surprised"))
                         setExpr(QStringLiteral("happy"), 500);
+                    // 停稳了才记位置。放在这里而不是拖动过程中：
+                    // 拖动时每帧都在动，存盘会变成每帧写一次配置文件。
+                    emit settled();
                 }
             }
         }

@@ -1,6 +1,7 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDir>
+#include <QLockFile>
 #include <QMouseEvent>
 #include <QScreen>
 #include <QTextStream>
@@ -8,10 +9,12 @@
 #include <QtMath>
 
 #include <cstdio>
+#include <memory>
 
 #include "metrics.h"
 #include "petpack.h"
 #include "petview.h"
+#include "shell.h"
 #include "version.h"
 
 // 情侣桌宠 · 最小渲染器 + 交互原型
@@ -87,15 +90,58 @@ int main(int argc, char *argv[])
                                   QStringLiteral("deg"));
     QCommandLineOption waveOpt(QStringLiteral("wave"),
                                QStringLiteral("启动后 0.6 秒自动挥一次手"));
+    QCommandLineOption trayTestOpt(QStringLiteral("test-tray"),
+                                   QStringLiteral("依次触发托盘菜单项，验证托盘链路后退出"));
+    QCommandLineOption autostartOpt(QStringLiteral("set-autostart"),
+                                    QStringLiteral("设置开机自启后退出：on / off / status"),
+                                    QStringLiteral("on|off|status"));
     parser.addOptions({packOpt, widthOpt, fpsOpt, idleFpsOpt, benchOpt, followOpt, animateOpt,
                        snapOpt, snapAngleOpt, snapExprOpt, throwOpt, traceOpt, dragTestOpt,
-                       snapArmOpt, waveOpt, dblTestOpt});
+                       snapArmOpt, waveOpt, dblTestOpt, trayTestOpt, autostartOpt});
     parser.process(app);
+
+    // 自启开关不需要窗口，先处理掉再决定要不要建 GUI。
+    // 但也得等 QApplication 起来——QSettings / QStandardPaths 都依赖它。
+    if (parser.isSet(autostartOpt)) {
+        const QString v = parser.value(autostartOpt).toLower().trimmed();
+        if (v == QLatin1String("status")) {
+            std::printf("[autostart] %s\n", pet::shell::autostartEnabled() ? "on" : "off");
+            return 0;
+        }
+        if (v != QLatin1String("on") && v != QLatin1String("off")) {
+            std::fprintf(stderr, "[autostart] 只接受 on / off / status\n");
+            return 2;
+        }
+        const bool wantOn = (v == QLatin1String("on"));
+        if (!pet::shell::setAutostart(wantOn)) {
+            std::fprintf(stderr, "[autostart] 写入失败\n");
+            return 1;
+        }
+        std::printf("[autostart] 已%s（当前状态：%s）\n", wantOn ? "开启" : "关闭",
+                    pet::shell::autostartEnabled() ? "on" : "off");
+        return 0;
+    }
 
     const QString packDir = parser.value(packOpt);
     const int targetWidth = qBound(80, parser.value(widthOpt).toInt(), 1200);
     const int fps = qBound(1, parser.value(fpsOpt).toInt(), 120);
     const int idleFps = qBound(1, parser.value(idleFpsOpt).toInt(), fps);
+
+    // 「一次性模式」：测性能、截图——跑完就退，不挂托盘。
+    // 不加这个区分的话，每跑一次 bench 都会弹一个托盘图标出来。
+    const bool oneShot = parser.isSet(benchOpt) || parser.isSet(snapOpt);
+
+    // 单实例锁只拦「真的要常驻」的启动。测试模式各跑各的，
+    // 否则回归脚本第二个实例会被锁挡住。
+    std::unique_ptr<QLockFile> instanceLock;
+    if (!oneShot && !parser.isSet(trayTestOpt)) {
+        instanceLock = pet::shell::acquireSingleInstance();
+        if (!instanceLock) {
+            std::fprintf(stderr,
+                         "[single] 已经有一个桌宠在跑了。要再开一个请加 --bench/--snapshot。\n");
+            return 0;
+        }
+    }
 
     pet::PetPack pack;
     QString err;
@@ -120,6 +166,44 @@ int main(int argc, char *argv[])
 
     pet::PetView view(pack);
     view.setTargetFps(fps, idleFps);
+    // 测性能/截图时不恢复上次位置：起点必须每次都一样，否则测出来的数不可比
+    // （上次停在半空的话，这次启动要先掉下来，帧数和 CPU 都不对得上）。
+    if (oneShot)
+        view.setRestoreSavedPos(false);
+
+    // --- 桌面外壳：托盘 / 位置记忆 ---
+    //
+    // 要在 show() 之前挂上：show() 里会去读上次的位置。
+    // 托盘本身也得比窗口先存在，否则关窗那一刻没人接住它。
+    if (!oneShot) {
+        auto *tray = new pet::Tray(view, pack, &app);
+        if (tray->isAvailable()) {
+            view.setCloseHidesToTray(true);
+            // 有托盘时「最后一个窗口关闭」不等于要退出——桌宠就该常驻
+            app.setQuitOnLastWindowClosed(false);
+        } else {
+            // 没有托盘就别拦着退出，否则用户关掉窗口后进程还在，且没有任何
+            // 界面入口能把它叫回来或杀掉
+            delete tray;
+            tray = nullptr;
+        }
+
+        if (tray && parser.isSet(trayTestOpt)) {
+            QTimer::singleShot(700, tray, [tray] {
+                tray->selfTest();
+                QCoreApplication::quit();
+            });
+        }
+
+        // 停稳时记一次位置（拖动松手、落地静止）。不在拖动过程中存，
+        // 那样会变成每帧写一次配置文件。
+        QObject::connect(&view, &pet::PetView::settled, &view,
+                         [&view] { pet::shell::savePos(view.pos()); });
+        // 兜底：任何退出路径（菜单、Ctrl+C、注销）都要把位置留住
+        QObject::connect(&app, &QCoreApplication::aboutToQuit, &view,
+                         [&view] { pet::shell::savePos(view.pos()); });
+    }
+
     view.show();
 
     int benchSecs = 0;

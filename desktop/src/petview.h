@@ -54,6 +54,22 @@ public:
     /// 每 100ms 打印一次位置与速度，配合 --throw 观察轨迹。
     void setTrace(bool on);
 
+    /// 回到当前屏幕的右下角。托盘菜单用。
+    void resetHome();
+
+    /// 有托盘时，关窗应该只是收进托盘而不是退出。
+    /// 没有托盘的环境（部分极简桌面）必须保持「关窗=退出」，否则窗口一关就再也叫不出来。
+    void setCloseHidesToTray(bool on) { m_closeHidesToTray = on; }
+
+    /// 是否在首帧恢复上次的位置。bench/截图模式要关掉：
+    /// 否则上一次留下的位置（尤其是半空中的）会让每次测量起点都不同，
+    /// 性能数字就不可比了。
+    void setRestoreSavedPos(bool on) { m_restoreSavedPos = on; }
+
+signals:
+    /// 桌宠停稳了（拖动松手、落地静止），此时的位置值得记住。
+    void settled();
+
 protected:
     void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
@@ -61,6 +77,8 @@ protected:
     void mouseReleaseEvent(QMouseEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
     void showEvent(QShowEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
 
 private:
     void tick();
@@ -70,6 +88,7 @@ private:
     void updateFollowTarget(qreal dt);
     void stepPhysics(qreal dt);
     void updateGround();
+    void updateGround(const QRect &avail);
     void benchTick();
     void applyFrameRate(bool active);
     QRect currentAvail() const;
@@ -127,6 +146,10 @@ private:
     qint64 m_waveUntil = 0;   ///< 0 = 没在挥手
     qint64 m_waveStart = 0;   ///< 挥手开始的时刻，淡化与摆动相位都从它算
     qreal m_armAngle = 0.0;
+
+    // --- 桌面外壳 ---
+    bool m_closeHidesToTray = false;
+    bool m_restoreSavedPos = true;
 
     // --- 表情状态机 ---
     QString m_expr;

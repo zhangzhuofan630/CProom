@@ -46,6 +46,8 @@ qt_add_executable(desktop
     src/main.cpp
     src/petview.cpp
     src/petview.h
+    src/shell.cpp
+    src/shell.h
 )
 target_link_libraries(desktop PRIVATE petcore Qt6::Widgets)
 

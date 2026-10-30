@@ -10,10 +10,13 @@
 原型长这样：一个 202×267 的透明置顶窗口，五层图像（腿/身/**手臂**/头/衣领遮罩）用 QPainter 合成，
 鼠标移动时头会跟着转，会自己眨眼，点一下会跳，**双击会挥手**，
 **按住能拎起来、甩出去会落到任务栏上弹一下**，静置 20 秒会犯困。
-实测空闲 CPU **0.29%**、内存 **57MB**。
+挂在系统托盘上，右键能挥手 / 显示隐藏 / 回到右下角 / 开机自启 / 退出；
+关窗是收进托盘，位置会记住，重复启动不会叠出两只。
+实测空闲 CPU **0.3%**、内存 **57MB**。
 渲染选型见 [`docs/s09-render-report.md`](docs/s09-render-report.md)，交互手感见
 [`docs/s10-interaction.md`](docs/s10-interaction.md)，手臂骨骼见
-[`docs/s11-arm-layer.md`](docs/s11-arm-layer.md)。
+[`docs/s11-arm-layer.md`](docs/s11-arm-layer.md)，托盘与外壳见
+[`docs/s12-shell.md`](docs/s12-shell.md)。
 
 > 注意：仓库里**没有角色素材**（含人脸，永不入库）。想跑起来需要自己生成一套 petpack，
 > 或者等后续提供示例角色包。
@@ -81,6 +84,7 @@ ctest --test-dir build --output-on-failure
 | [`docs/s09-render-report.md`](docs/s09-render-report.md) | 渲染器实测：CPU/内存、动态帧率策略、渲染选型结论 |
 | [`docs/s10-interaction.md`](docs/s10-interaction.md) | 拖拽与落地物理：一套积分、摩擦分级、边界钳制 |
 | [`docs/s11-arm-layer.md`](docs/s11-arm-layer.md) | 手臂骨骼层：inpaint 出素材、球关节、颜色通道 bug |
+| [`docs/s12-shell.md`](docs/s12-shell.md) | 托盘、位置记忆、单实例、开机自启 |
 
 ## 许可
 
