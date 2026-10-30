@@ -45,6 +45,12 @@ public:
     /// 给桌宠一个初速度（px/s，y 向上为负）。无头环境下验证落体用。
     void throwPet(qreal vx, qreal vy);
 
+    /// 挥一次手（也可以用它做无头验证：--wave）。
+    void startWave();
+
+    /// 冻结在某个手臂角度并保持挥手姿态，用于截图核对（配合 freeze 使用）。
+    void snapWave(qreal armAngleDeg);
+
     /// 每 100ms 打印一次位置与速度，配合 --throw 观察轨迹。
     void setTrace(bool on);
 
@@ -53,11 +59,13 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
     void showEvent(QShowEvent *event) override;
 
 private:
     void tick();
     void drawLayer(QPainter &p, const QString &name);
+    void drawArm(QPainter &p, qreal angleDeg);
     void setExpr(const QString &name, int durationMs);
     void updateFollowTarget(qreal dt);
     void stepPhysics(qreal dt);
@@ -65,6 +73,14 @@ private:
     void benchTick();
     void applyFrameRate(bool active);
     QRect currentAvail() const;
+    bool isWaving() const { return m_waveUntil > 0; }
+
+    /// 挥手整体的「浓度」：1 = 完全挥手，0 = 完全是常态。首尾各用 220ms 过渡。
+    ///
+    /// 臂层只有「举起」这一个姿态，没有「垂下」，所以抬手和收手都没法用旋转
+    /// 演出来——转多了手臂会扎进躯干。既然演不出来就淡化：两个 body 版本只有
+    /// 右臂那一片像素不同，其余完全一致，叠上去不会在别处产生重影。
+    qreal waveMix() const;
 
     const PetPack &m_pack;
 
@@ -103,6 +119,14 @@ private:
     // --- 落地压扁 ---
     qreal m_squash = 0.0;  ///< 0..1，落地瞬间置 1，指数衰减
     qreal m_angleJitter = 0.0;  ///< 落地时头部被震一下
+
+    // --- 挥手（手臂骨骼）---
+    //
+    // 挥手要同时做两件事：把 body 换成"没有右臂"的挥手版，再让手臂层绕肩轴
+    // 摆动。只换其一都不成立——不换 body 会看见两条手臂，不摆手就是张静态图。
+    qint64 m_waveUntil = 0;   ///< 0 = 没在挥手
+    qint64 m_waveStart = 0;   ///< 挥手开始的时刻，淡化与摆动相位都从它算
+    qreal m_armAngle = 0.0;
 
     // --- 表情状态机 ---
     QString m_expr;

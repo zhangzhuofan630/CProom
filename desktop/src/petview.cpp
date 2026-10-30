@@ -47,6 +47,12 @@ constexpr qreal kMaxThrow = 2400.0;   ///< 甩出速度上限，防止一挥手�
 
 constexpr qreal kDragThreshold = 4.0;  ///< 按下后位移超过此值（px）才算拖动，否则算点击
 constexpr qint64 kClickMaxMs = 400;     ///< 按住超过这么久就不算点击
+
+constexpr qint64 kWaveDurationMs = 2600;  ///< 一次挥手持续多久
+constexpr qint64 kWaveFadeMs = 220;       ///< 首尾淡入淡出的时长
+constexpr qreal kWaveHz = 1.6;            ///< 手臂摆动频率
+constexpr qreal kWaveMid = -7.0;          ///< 摆动中心角（度），正 = 顺时针 = 往下放
+constexpr qreal kWaveAmp = 11.0;          ///< 摆幅
 } // namespace
 
 PetView::PetView(const PetPack &pack, QWidget *parent)
@@ -94,6 +100,8 @@ void PetView::freeze(qreal angleDeg, const QString &exprName)
     m_dragging = false;
     m_squash = 0.0;
     m_angleJitter = 0.0;
+    m_waveUntil = 0;
+    m_armAngle = 0.0;
     m_expr = exprName;
     m_exprUntil = 1 << 30;
     update();
@@ -198,7 +206,33 @@ void PetView::paintEvent(QPaintEvent *)
     p.translate(kPadX, baseY - m_breathOffset);
 
     drawLayer(p, QStringLiteral("legs"));
-    drawLayer(p, QStringLiteral("body"));
+
+    // 挥手时身体换成「右臂被挖掉」的那版，否则会同时看到插兜的袖子和举起的手臂。
+    // mix 在 0..1 之间时是新旧两版交叠（淡化过渡期），此时先铺挥手版，
+    // 再把常态版按 (1-mix) 盖上去 —— 两版只在右臂那一片不同，别处都是同一批像素，
+    // 所以重叠区域以外不会有任何变化。
+    const qreal mix = waveMix();
+    if (mix > 0.001 && m_pack.bodyWave()) {
+        const Layer *bw = m_pack.bodyWave();
+        p.drawPixmap(bw->offset, bw->pixmap);
+        if (mix < 0.999) {
+            p.setOpacity(1.0 - mix);
+            drawLayer(p, QStringLiteral("body"));
+            p.setOpacity(1.0);
+        }
+    } else {
+        drawLayer(p, QStringLiteral("body"));
+    }
+
+    // 手臂排在 body 之后、head 之前：
+    //   · 放到 body 之前会被身体压住
+    //   · 放到 head 之后，臂根那块被裁成直边的白肉会露在外面
+    // 手掌在头右侧、不与脸重叠，被 head 盖住没有副作用。
+    if (mix > 0.001) {
+        p.setOpacity(mix);
+        drawArm(p, m_armAngle);
+        p.setOpacity(1.0);
+    }
 
     // 头部：以颈部为轴心旋转。这是 petpack 里 neck_y 的唯一用途。
     p.save();
@@ -228,6 +262,63 @@ void PetView::drawLayer(QPainter &p, const QString &name)
         return;
     // 加载时已缩放到目标尺寸并裁过透明边，这里是 1:1 blit，无重采样
     p.drawPixmap(l->offset, l->pixmap);
+}
+
+void PetView::drawArm(QPainter &p, qreal angleDeg)
+{
+    const Layer *a = m_pack.arm();
+    if (!a || a->isNull())
+        return;
+
+    // 绕肩关节旋转。臂层自带一块以肩为圆心的圆形补丁，转动时它跟着转，
+    // 臂根那道缝始终被盖住——这就是球关节。
+    const QPointF pivot = m_pack.armPivot();
+    p.save();
+    p.translate(pivot);
+    p.rotate(angleDeg);
+    p.translate(-pivot);
+    p.drawPixmap(a->offset, a->pixmap);
+    p.restore();
+}
+
+void PetView::snapWave(qreal armAngleDeg)
+{
+    // 用「永远不到期」把挥手姿态钉住；配合 freeze() 时定时器已经停了，
+    // tick 不会再改写 m_armAngle。起始时刻推到很久以前，让 waveMix() 恒为 1
+    // （否则截图会抓到淡化途中的半透明状态）。
+    m_waveStart = m_clock.elapsed() - kWaveDurationMs * 4;
+    m_waveUntil = 1LL << 40;
+    m_armAngle = armAngleDeg;
+    update();
+}
+
+qreal PetView::waveMix() const
+{
+    if (m_waveUntil <= 0)
+        return 0.0;
+    const qint64 now = m_clock.elapsed();
+    const qint64 remain = m_waveUntil - now;
+    if (remain <= 0)
+        return 0.0;
+    const qreal fadeIn = qBound(0.0, double(now - m_waveStart) / kWaveFadeMs, 1.0);
+    const qreal fadeOut = qBound(0.0, double(remain) / kWaveFadeMs, 1.0);
+    return qMin(fadeIn, fadeOut);
+}
+
+void PetView::startWave()
+{
+    if (!m_pack.hasArm() || !m_pack.bodyWave()) {
+        std::printf("[wave] 这个 petpack 没有手臂层，跳过\n");
+        return;
+    }
+    const qint64 now = m_clock.elapsed();
+    m_waveStart = now;
+    m_waveUntil = now + kWaveDurationMs;
+    m_lastInput = now;
+    m_activeUntil = now + kWaveDurationMs;
+    m_followCursor = true;
+    setExpr(QStringLiteral("happy"), int(kWaveDurationMs));
+    applyFrameRate(true);
 }
 
 void PetView::setExpr(const QString &name, int durationMs)
@@ -363,6 +454,17 @@ void PetView::mouseReleaseEvent(QMouseEvent *event)
     m_activeUntil = now + 400;
     applyFrameRate(true);
     event->accept();
+}
+
+void PetView::mouseDoubleClickEvent(QMouseEvent *event)
+{
+    // 双击 = 挥挥手。单击是跳，所以不能都放在 press 里。
+    if (event->button() == Qt::LeftButton) {
+        startWave();
+        event->accept();
+        return;
+    }
+    QWidget::mouseDoubleClickEvent(event);
 }
 
 void PetView::showEvent(QShowEvent *event)
@@ -534,6 +636,19 @@ void PetView::tick()
     stepPhysics(dt);
     updateFollowTarget(dt);
 
+    // --- 挥手 ---
+    if (m_waveUntil > 0) {
+        if (now >= m_waveUntil) {
+            m_waveUntil = 0;
+            m_armAngle = 0.0;
+        } else {
+            // 用一个正弦摆：比关键帧省事，且频率/幅度随时可调。
+            // 相位从 m_waveStart 算，淡化不影响摆动进度。
+            const qreal t = (now - m_waveStart) / 1000.0;
+            m_armAngle = kWaveMid + qSin(t * 2.0 * M_PI * kWaveHz) * kWaveAmp;
+        }
+    }
+
     // --- 表情状态机 ---
     if (now > m_exprUntil) {
         if (now - m_lastInput > 20000) {
@@ -558,16 +673,17 @@ void PetView::tick()
     const bool physicsMoving = m_airborne || m_dragging || m_squash > 0.01
                             || qAbs(m_velX) > 1.0;
     const bool exprAnim = now < m_exprUntil && (m_exprUntil - now) < 400;
-    applyFrameRate(headMoving || physicsMoving || exprAnim || now < m_activeUntil);
+    applyFrameRate(headMoving || physicsMoving || exprAnim || m_waveUntil > 0
+                   || now < m_activeUntil);
     m_prevAngle = m_angleDeg;
     m_prevOffX = m_offX;
 
     if (m_trace && now >= m_traceNext) {
         m_traceNext = now + 100;
         std::printf("[trace] t=%6.2fs pos=(%7.1f,%7.1f) vel=(%7.0f,%7.0f) air=%d drag=%d "
-                    "squash=%4.2f ground=%7.1f\n",
+                    "squash=%4.2f ground=%7.1f arm=(%5.1fdeg,mix=%.2f)\n",
                     now / 1000.0, m_posX, m_posY, m_velX, m_velY, int(m_airborne),
-                    int(m_dragging), m_squash, m_groundY);
+                    int(m_dragging), m_squash, m_groundY, m_armAngle, waveMix());
         std::fflush(stdout);
     }
 

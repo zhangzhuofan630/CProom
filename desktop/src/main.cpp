@@ -80,8 +80,16 @@ int main(int argc, char *argv[])
                                 QStringLiteral("每 100ms 打印一次位置与速度"));
     QCommandLineOption dragTestOpt(QStringLiteral("test-drag"),
                                    QStringLiteral("合成一次「按下→拖动→松手」以验证拖拽链路"));
+    QCommandLineOption dblTestOpt(QStringLiteral("test-dbl"),
+                                  QStringLiteral("合成一次双击，验证「跳一下 + 挥手」链路"));
+    QCommandLineOption snapArmOpt(QStringLiteral("snap-arm"),
+                                  QStringLiteral("截图时的手臂角度（度），同时切到挥手姿态"),
+                                  QStringLiteral("deg"));
+    QCommandLineOption waveOpt(QStringLiteral("wave"),
+                               QStringLiteral("启动后 0.6 秒自动挥一次手"));
     parser.addOptions({packOpt, widthOpt, fpsOpt, idleFpsOpt, benchOpt, followOpt, animateOpt,
-                       snapOpt, snapAngleOpt, snapExprOpt, throwOpt, traceOpt, dragTestOpt});
+                       snapOpt, snapAngleOpt, snapExprOpt, throwOpt, traceOpt, dragTestOpt,
+                       snapArmOpt, waveOpt, dblTestOpt});
     parser.process(app);
 
     const QString packDir = parser.value(packOpt);
@@ -102,6 +110,9 @@ int main(int argc, char *argv[])
                 pack.neckY());
     std::printf("[pack] layers=%s\n", qUtf8Printable(pack.layerNames().join(QLatin1Char(','))));
     std::printf("[pack] exprs=%s\n", qUtf8Printable(pack.exprNames().join(QLatin1Char(','))));
+    std::printf("[pack] arm=%d wave=%d pivot=(%.1f,%.1f) angle=[%.0f,%.0f]\n",
+                pack.hasArm(), pack.bodyWave() != nullptr, pack.armPivot().x(),
+                pack.armPivot().y(), pack.armAngleMin(), pack.armAngleMax());
     std::printf("[pack] pixmap_mem=%.1fMB\n", pack.memoryBytes() / 1048576.0);
 
     const pet::ProcSample base = pet::sampleProcess();
@@ -121,7 +132,8 @@ int main(int argc, char *argv[])
             mode = pet::PetView::BenchMode::Follow;
         view.setBench(benchSecs, mode);
     } else {
-        std::printf("[hint] 桌宠已启动。点一下会跳；按住能拖动，甩出去它会落到任务栏上。\n");
+        std::printf("[hint] 桌宠已启动。点一下会跳；按住能拖动，甩出去它会落到任务栏上；"
+                    "双击它会挥手。\n");
     }
 
     Q_UNUSED(benchSecs);
@@ -165,9 +177,31 @@ int main(int argc, char *argv[])
         }
     }
 
+    if (parser.isSet(waveOpt))
+        QTimer::singleShot(600, &view, [&view] { view.startWave(); });
+
+    // 双击挥手是唯一能让用户触发挥手的人口，而沙箱里没有 xdotool。
+    // 这里按 Qt 真实的派发顺序合成一整套事件：press → release → dblclick → release。
+    // 注意双击中间还夹着第一次单击，而那一次会触发跳跃——这是真实行为，
+    // 所以要按原样复现，否则测不出「跳完再挥手」这条路径。
+    if (parser.isSet(dblTestOpt)) {
+        const QPoint g = view.mapToGlobal(QPoint(view.width() / 2, view.height() / 2));
+        const QPoint lp = view.mapFromGlobal(g);
+        const auto send = [&view, lp, g](QEvent::Type t, Qt::MouseButton btn) {
+            QMouseEvent ev(t, lp, g, btn, btn, Qt::NoModifier);
+            QApplication::sendEvent(&view, &ev);
+        };
+        QTimer::singleShot(500, &view, [send] { send(QEvent::MouseButtonPress, Qt::LeftButton); });
+        QTimer::singleShot(560, &view, [send] { send(QEvent::MouseButtonRelease, Qt::LeftButton); });
+        QTimer::singleShot(600, &view, [send] { send(QEvent::MouseButtonDblClick, Qt::LeftButton); });
+        QTimer::singleShot(660, &view, [send] { send(QEvent::MouseButtonRelease, Qt::LeftButton); });
+    }
+
     if (parser.isSet(snapOpt)) {
         const QString outPath = parser.value(snapOpt);
         view.freeze(parser.value(snapAngleOpt).toDouble(), parser.value(snapExprOpt));
+        if (parser.isSet(snapArmOpt))
+            view.snapWave(parser.value(snapArmOpt).toDouble());
         // 等一帧画完再 render，否则拿到的可能是空 backing store
         QTimer::singleShot(350, &view, [&view, outPath] {
             QPixmap pm(view.size());

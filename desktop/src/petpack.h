@@ -53,6 +53,21 @@ public:
         return it == m_exprs.constEnd() ? nullptr : &it.value();
     }
 
+    /// 右臂（可旋转的骨骼层）。没有 arm_r.png 时返回 nullptr。
+    const Layer *arm() const { return m_hasArm ? &m_arm : nullptr; }
+
+    /// 挥手姿态的身体（右臂被挖掉）。没有 body_wave.png 时返回 nullptr。
+    const Layer *bodyWave() const { return m_hasWave ? &m_bodyWave : nullptr; }
+
+    bool hasArm() const { return m_hasArm; }
+
+    /// 手臂旋转轴（层坐标，不是画布坐标）。
+    QPointF armPivot() const { return m_armPivot; }
+
+    /// 手臂允许的旋转角（度）。正角度 = 顺时针。
+    qreal armAngleMin() const { return m_armAngleMin; }
+    qreal armAngleMax() const { return m_armAngleMax; }
+
     QStringList layerNames() const { return m_layerNames; }
     QStringList exprNames() const { return m_exprs.keys(); }
 
@@ -70,6 +85,15 @@ private:
     int m_width = 0;
     int m_height = 0;
     qreal m_neckY = 0;
+
+    // --- 手臂骨骼（可选）---
+    Layer m_arm;
+    Layer m_bodyWave;
+    bool m_hasArm = false;
+    bool m_hasWave = false;
+    QPointF m_armPivot;
+    qreal m_armAngleMin = -24.0;
+    qreal m_armAngleMax = 20.0;
 };
 
 } // namespace pet

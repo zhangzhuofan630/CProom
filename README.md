@@ -7,11 +7,13 @@
 
 **当前状态：Sprint 0 验证完成（可行性 GO），有一版能在桌面上跑的分层渲染原型。**
 
-原型长这样：一个 202×267 的透明置顶窗口，四层图像（腿/身/头/衣领遮罩）用 QPainter 合成，
-鼠标移动时头会跟着转，会自己眨眼，点一下会跳，**按住能拎起来、甩出去会落到任务栏上弹一下**，
-静置 20 秒会犯困。实测空闲 CPU **0.33%**、内存 **55MB**。
+原型长这样：一个 202×267 的透明置顶窗口，五层图像（腿/身/**手臂**/头/衣领遮罩）用 QPainter 合成，
+鼠标移动时头会跟着转，会自己眨眼，点一下会跳，**双击会挥手**，
+**按住能拎起来、甩出去会落到任务栏上弹一下**，静置 20 秒会犯困。
+实测空闲 CPU **0.29%**、内存 **57MB**。
 渲染选型见 [`docs/s09-render-report.md`](docs/s09-render-report.md)，交互手感见
-[`docs/s10-interaction.md`](docs/s10-interaction.md)。
+[`docs/s10-interaction.md`](docs/s10-interaction.md)，手臂骨骼见
+[`docs/s11-arm-layer.md`](docs/s11-arm-layer.md)。
 
 > 注意：仓库里**没有角色素材**（含人脸，永不入库）。想跑起来需要自己生成一套 petpack，
 > 或者等后续提供示例角色包。
@@ -78,6 +80,7 @@ ctest --test-dir build --output-on-failure
 | [`docs/petpack-spec-draft.md`](docs/petpack-spec-draft.md) | 角色包格式草案 v0.1（由真实切层数据倒推） |
 | [`docs/s09-render-report.md`](docs/s09-render-report.md) | 渲染器实测：CPU/内存、动态帧率策略、渲染选型结论 |
 | [`docs/s10-interaction.md`](docs/s10-interaction.md) | 拖拽与落地物理：一套积分、摩擦分级、边界钳制 |
+| [`docs/s11-arm-layer.md`](docs/s11-arm-layer.md) | 手臂骨骼层：inpaint 出素材、球关节、颜色通道 bug |
 
 ## 许可
 

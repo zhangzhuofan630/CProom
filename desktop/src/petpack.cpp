@@ -113,6 +113,46 @@ bool PetPack::load(const QString &dir, int targetWidth, QString *error)
         scaled.insert(nm, sl);
     }
 
+    // --- 可选：手臂骨骼层 ---
+    //
+    // 手臂不是必需的。没有 arm_r.png 的老 petpack 照样能跑，只是做不了挥手。
+    // 这样加新层不会让旧角色包失效。
+    ScaledLayer armScaled;
+    ScaledLayer waveScaled;
+    QPointF armPivotCanvas;
+    {
+        const QString armPath = d.filePath(QStringLiteral("layers/arm_r.png"));
+        const QString wavePath = d.filePath(QStringLiteral("layers/body_wave.png"));
+        if (QFileInfo::exists(armPath)) {
+            armScaled = scaleLayer(armPath, targetWidth, canvasH, scale);
+            m_hasArm = !armScaled.img.isNull();
+        }
+        if (QFileInfo::exists(wavePath)) {
+            waveScaled = scaleLayer(wavePath, targetWidth, canvasH, scale);
+            m_hasWave = !waveScaled.img.isNull();
+        }
+
+        if (m_hasArm) {
+            QFile mf(d.filePath(QStringLiteral("layers/arm_meta.json")));
+            if (mf.open(QIODevice::ReadOnly)) {
+                const QJsonObject am =
+                    QJsonDocument::fromJson(mf.readAll()).object()
+                        .value(QStringLiteral("arm_r")).toObject();
+                const QJsonArray pv = am.value(QStringLiteral("pivot")).toArray();
+                if (pv.size() == 2) {
+                    armPivotCanvas = QPointF(pv.at(0).toDouble() * scale,
+                                             pv.at(1).toDouble() * scale);
+                }
+                if (am.contains(QStringLiteral("angle_min")))
+                    m_armAngleMin = am.value(QStringLiteral("angle_min")).toDouble();
+                if (am.contains(QStringLiteral("angle_max")))
+                    m_armAngleMax = am.value(QStringLiteral("angle_max")).toDouble();
+            }
+            if (armPivotCanvas.isNull())
+                armPivotCanvas = QPointF(targetWidth / 2.0, canvasH * scale * 0.6);
+        }
+    }
+
     // 统一裁剪原点取四层的并集 + 头部旋转后扫到的区域。
     //
     // 这一条直接决定窗口大小，也就决定了每帧要合成多少像素：单独裁每层
@@ -136,6 +176,22 @@ bool PetPack::load(const QString &dir, int targetWidth, QString *error)
         }
     }
 
+    // 手臂抬起时会甩出身体包围盒之外，躺着不裁就会一举手就被削掉。
+    // 把「臂层绕肩轴转到两个极限角」的包围盒都并进来——和 head 的处理同理，
+    // 只是多一个旋转轴。
+    if (m_hasArm && !armScaled.alphaBox.isEmpty()) {
+        for (const qreal deg : {m_armAngleMin, m_armAngleMax}) {
+            QTransform t;
+            t.translate(armPivotCanvas.x(), armPivotCanvas.y());
+            t.rotate(deg);
+            t.translate(-armPivotCanvas.x(), -armPivotCanvas.y());
+            unionBox = unionBox.united(t.mapRect(armScaled.alphaBox));
+        }
+    }
+    // 挥手姿态的身体比 idle 身体宽（右臂位置被补成了衣摆），也要并进来
+    if (m_hasWave && !waveScaled.alphaBox.isEmpty())
+        unionBox = unionBox.united(waveScaled.alphaBox);
+
     // 留 2px 余量抗锯齿边缘
     unionBox = unionBox.adjusted(-2, -2, 2, 2)
                    .intersected(QRect(0, 0, targetWidth, qMax(1, qRound(canvasH * scale))));
@@ -150,6 +206,13 @@ bool PetPack::load(const QString &dir, int targetWidth, QString *error)
 
     for (const QString &nm : std::as_const(m_layerNames))
         m_layers.insert(nm, makeLayer(scaled.value(nm), unionBox.topLeft()));
+
+    if (m_hasArm) {
+        m_arm = makeLayer(armScaled, unionBox.topLeft());
+        m_armPivot = armPivotCanvas - QPointF(unionBox.topLeft());
+    }
+    if (m_hasWave)
+        m_bodyWave = makeLayer(waveScaled, unionBox.topLeft());
 
     // --- 表情补丁 ---
     const QDir layerDir(d.filePath(QStringLiteral("layers")));
@@ -177,6 +240,8 @@ qint64 PetPack::memoryBytes() const
         add(l);
     for (const auto &l : m_exprs)
         add(l);
+    add(m_arm);
+    add(m_bodyWave);
     return n;
 }
 

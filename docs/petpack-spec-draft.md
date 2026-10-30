@@ -32,6 +32,9 @@ character.petpack/          # 其实是个目录，不是压缩包（便于用�
 │   ├── body.png            # 躯干
 │   ├── head.png            # 头（含头发、眼镜）
 │   ├── collar.png          # 衣领遮罩（关键，见第四节）
+│   ├── arm_r.png           # 右臂（可选，球关节，见第六节）
+│   ├── body_wave.png       # 无右臂的躯干（可选，与 arm_r 配套）
+│   ├── arm_meta.json       # 手臂轴心与角度限位（可选）
 │   ├── expr_blink.png      # 表情补丁（见第五节）
 │   ├── expr_happy.png
 │   ├── expr_sleepy.png
@@ -232,7 +235,79 @@ layers/
 
 ---
 
-## 六、animations/*.json
+## 六、手臂层（可选，球关节）
+
+> 状态：已在渲染器实现并通过实测（`docs/s11-arm-layer.md`）。
+> **三个文件都是可选的**：老 petpack 缺这几个文件照样能跑，只是做不了挥手。
+> 加层不能让旧角色包失效。
+
+### 三个文件
+
+| 文件 | 内容 |
+|---|---|
+| `layers/arm_r.png` | 手臂（袖子 + 手 + **以肩为圆心的圆形补丁**） |
+| `layers/body_wave.png` | 右臂已被挖掉、原位补成衣摆的躯干 |
+| `layers/arm_meta.json` | 轴心、关节半径、角度限位 |
+
+`body_wave` 不能由 `body` 挖洞得到——挖出来是透明洞，会露出桌面。必须来自
+**在原图上 inpaint 掉手臂**的那一版，让 AI 把袖子位置补成完整衣摆。
+
+### 球关节：为什么臂层要带一块圆
+
+手臂绕肩旋转时，臂根与躯干之间必然裂开一条缝。解是让臂层多带一块
+**以旋转轴为圆心的圆形像素**——转的时候圆跟着转，缝始终被盖住。
+
+```
+arm_mask = polygon(沿描边读出的轮廓) ∪ circle(pivot, r=joint_radius)
+         → dilate → 减去躯干保护区（防止把衣摆吃进来）
+```
+
+两个必须做的修正：
+
+1. **多边形要 dilate**。直线连的多边形切不掉手掌/袖口的圆弧，会削掉一圈。
+   背景 alpha=0，多包进来画不出来，无副作用。
+2. **dilate 后必须减掉躯干保护区**。否则臂根会带进一块衣摆，边缘被切成直边，
+   旋转时那块白肉会露在外面。
+
+### arm_meta.json
+
+```json
+{
+  "arm_r": {
+    "pivot": [486, 656],        // 肩关节，原图像素坐标
+    "joint_radius": 46,         // 圆形补丁半径，须 ≥ 轴心到臂根最远点
+    "angle_min": -24,           // 负 = 逆时针 = 抬手（屏幕坐标）
+    "angle_max": 20,            // 正 = 顺时针 = 放手
+    "note": "正角度 = 顺时针（屏幕坐标），正值让手臂往下放"
+  },
+  "z_order": ["legs", "body", "arm_r", "head", "collar"]
+}
+```
+
+`angle_max` 只有 20°：再往下转手臂会开始和衣摆互相穿插，+48° 袖根直接扎进躯干。
+**所以这个 rig 没有「手垂下」的姿态**，idle 必须用另一套 `body`。这一点直接决定了
+挥手首尾只能用交叉淡化过渡（见 `docs/s11-arm-layer.md` 第五节）。
+
+### 渲染位置：不是最上层
+
+**z-order：`legs → body → arm → head → collar`**
+
+手臂放最上层会露馅——臂根那块被裁成直边的地方会浮在头的上面。放在 `head`
+之前就没有副作用：手掌在头的右侧，不与脸重叠。
+
+### 包围盒
+
+手臂的包围盒必须把**绕轴转到两个角度限位**的区域都并进来，否则一举手窗口就把
+手裁掉。和 head 旋转的处理同理，只是多一个旋转轴：
+
+```
+for deg in (angle_min, angle_max):
+    unionBox ∪= rotate(arm_alphaBox, pivot, deg)
+```
+
+---
+
+## 七、animations/*.json
 
 关键帧 + 缓动，不存逐帧位图。
 
@@ -285,38 +360,49 @@ layers/
 
 ---
 
-## 七、渲染顺序（伪代码）
+## 八、渲染顺序（伪代码）
 
 ```
-for layer in layers sorted by z:
-    if layer.attach == "neck":
-        ctx.translate(neck)      // 或 pivot
-        ctx.rotate(headRotation)
-        ctx.translate(-pivot)
-    ctx.drawImage(layer.file, 0, 0)
+draw(legs)
+if waving:                              // 见第六节
+    draw(body_wave)                     // 无右臂版
+    if mix < 1: draw(body, alpha=1-mix) // 首尾淡化过渡
+else:
+    draw(body)
+if waving: draw(arm_r, rotate(armAngle, pivot=armPivot), alpha=mix)
+
+save()
+translate(neck + headOffset); rotate(headAngle); translate(-neck)
+draw(head)
+if expr: draw(expr_patch)
+restore()
+
+draw(collar)                            // 固定在身体上，不跟头动
 ```
 
 实测这个顺序下，4 层 300×400 画布在 Chromium 上稳定 60fps（demo 自带 FPS 计数）。
-**CPU 占用待 Qt 实现后复测**——Web Canvas 与 QML Scene Graph 不是一回事，不能互证。
+Qt 实现已复测：**空闲 0.29% CPU / 57MB 内存**（`docs/s09-render-report.md`、
+`docs/s11-arm-layer.md`），QWidget + QPainter 足够，不需要 QML。
 
 ---
 
-## 八、还没解决的问题
+## 九、还没解决的问题
 
 | # | 问题 | 影响 |
 |---|---|---|
-| 1 | **没有手臂层** | 挥手只能整体摆，手不能单独动。当前形象手插在兜里，勉强够用 |
+| 1 | ~~没有手臂层~~ | **已解决**（第六节）。但只有右臂，且没有「垂下」姿态，抬手/收手只能靠淡化 |
 | 2 | 层是矩形切分，不是语义切分 | 头发和脸在同一层，做不了「头发飘动」 |
 | 3 | 只有正面一个视角 | 转身需要新素材（AI 做不出来，得手绘或后期） |
 | 4 | `constraints` 的数值只对这一个头身比成立 | 换形象要重新测 |
 | 5 | 表情坐标是硬编码的 | 换形象要重新测眼睛/嘴坐标。长期方案是自动检测（霍夫圆 + 颜色聚类已跑通，可固化） |
 | 6 | 嘴部表情少 | 只有「张嘴笑」和「O 型嘴」，没有「撇嘴」「说话」 |
 
-第 1 项仍是下一版重点——没有手臂，「挥手」这个桌宠最高频的动作做不出来。
+下一版重点：左臂（素材里另一只手没露出来，得先补素材）、以及把动作从代码搬到
+`animations/*.json` —— 现在跳跃/呼吸/挥手/落地形变全是硬编码。
 
 ---
 
-## 九、下一步
+## 十、下一步
 
 1. **补手臂层**：需要重新生成一张手臂分开的素材，或从现有图手工分离
 2. 在 Qt 里实现最小渲染器，实测 CPU/内存（S0.9 的硬指标：空闲 CPU < 1%，内存 < 150MB）
@@ -324,7 +410,7 @@ for layer in layers sorted by z:
 
 ---
 
-## 十、实测数据附录
+## 十一、实测数据附录
 
 画布 768×1024，定稿形象 `4_生活照_s42`：
 
